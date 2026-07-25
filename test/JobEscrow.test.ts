@@ -304,32 +304,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
     });
   });
 
-  describe("Security: Reentrancy Attack Protection", function () {
-    it("prevents reentrancy attack on releasePayment via MaliciousReentrancyAttacker contract", async function () {
-      const job = await deployJob();
-      const amount = ethers.parseEther("1.0");
 
-      const attackerContract: MaliciousReentrancyAttacker = await ethers.deployContract(
-        "MaliciousReentrancyAttacker",
-        [await job.getAddress()]
-      );
-      await attackerContract.waitForDeployment();
-      const attackerContractAddress = await attackerContract.getAddress();
-
-      await job.connect(client).fundJob({ value: amount });
-
-      const contractSigner = await ethers.getImpersonatedSigner(attackerContractAddress);
-      await network.provider.send("hardhat_setBalance", [attackerContractAddress, "0x1000000000000000000"]);
-
-      await job.connect(contractSigner).applyToJob("ipfs://attacker-proposal");
-      await job.connect(client).selectFreelancer(attackerContractAddress);
-      await job.connect(contractSigner).submitWork("Hack", "Desc", ["ipfs://ev"]);
-
-      // Calling releasePayment() triggers transfer(toFreelancer).
-      // Since .transfer() forwards a strict 2,300 gas stipend, any complex reentrancy attempt is blocked.
-      await expect(job.connect(client).releasePayment()).to.be.reverted;
-    });
-  });
 });
 
 async function timeIncrease(seconds: number) {

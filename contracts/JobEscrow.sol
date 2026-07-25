@@ -2,9 +2,10 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./interfaces/IJobFactory.sol";
 
-contract JobEscrow is Initializable {
+contract JobEscrow is Initializable, ReentrancyGuard {
     enum JobStatus { Open, Selected, Submitted, Disputed, Completed, Cancelled }
     enum DisputeReason { QUALITY, NON_DELIVERY, SCOPE_DISAGREEMENT, PAYMENT_DISPUTE, OTHER }
 
@@ -130,13 +131,13 @@ contract JobEscrow is Initializable {
         emit TermsProposed(msg.sender, _termsHash);
     }
 
-    function cancelJob() external {
+    function cancelJob() external nonReentrant {
         require(msg.sender == client, "Only client cancels");
         require(status == JobStatus.Open, "Too late to cancel unilaterally");
         _refund();
     }
 
-    function proposeMutualCancel() external onlyParty {
+    function proposeMutualCancel() external onlyParty nonReentrant {
         require(status == JobStatus.Selected, "Wrong status");
         cancelConsent[msg.sender] = true;
         emit CancelConsentGiven(msg.sender);
@@ -149,7 +150,7 @@ contract JobEscrow is Initializable {
         status = JobStatus.Cancelled;
         uint256 refund = amount;
         amount = 0;
-        if (refund > 0) payable(client).transfer(refund);
+        if (refund > 0) _safeTransfer(client, refund);
         emit JobCancelled(refund);
     }
 
@@ -165,13 +166,13 @@ contract JobEscrow is Initializable {
         emit WorkSubmitted(title, evidenceHashes.length);
     }
 
-    function releasePayment() external {
+    function releasePayment() external nonReentrant {
         require(msg.sender == client, "Only client releases");
         require(status == JobStatus.Submitted, "Not submitted");
         _completeJob(10000); // 100% to freelancer
     }
 
-    function claimAutoRelease() external {
+    function claimAutoRelease() external nonReentrant {
         require(status == JobStatus.Submitted, "Not awaiting review");
         require(block.timestamp >= submittedAt + reviewPeriod, "Review period still active");
         _completeJob(10000);
@@ -195,7 +196,7 @@ contract JobEscrow is Initializable {
         emit DisputeResponseSubmitted(msg.sender, responseIpfsHash);
     }
 
-    function resolveDispute(uint256 freelancerBps, string calldata reasoningIpfsHash) external {
+    function resolveDispute(uint256 freelancerBps, string calldata reasoningIpfsHash) external nonReentrant {
         require(
             IJobFactory(factory).hasRole(IJobFactory(factory).ARBITRATOR_ROLE(), msg.sender),
             "Not an arbitrator"
@@ -216,12 +217,17 @@ contract JobEscrow is Initializable {
         uint256 toClient = distributable - toFreelancer;
 
         if (fee > 0) IJobFactory(factory).collectFee{value: fee}();
-        if (toFreelancer > 0) payable(freelancer).transfer(toFreelancer);
-        if (toClient > 0) payable(client).transfer(toClient);
+        if (toFreelancer > 0) _safeTransfer(freelancer, toFreelancer);
+        if (toClient > 0) _safeTransfer(client, toClient);
 
         if (freelancerBps > 0) {
             IJobFactory(factory).mintReputationSBT(freelancer, address(this));
         }
         emit PaymentReleased(toFreelancer, fee);
+    }
+
+    function _safeTransfer(address to, uint256 val) internal {
+        (bool ok, ) = payable(to).call{value: val}("");
+        require(ok, "Transfer failed");
     }
 }
