@@ -59,7 +59,8 @@ contract JobFactory is AccessControl {
     function withdrawTreasury(address to, uint256 amount) external onlyRole(TREASURY_ADMIN_ROLE) {
         require(amount <= treasuryBalance, "Insufficient treasury balance");
         treasuryBalance -= amount;
-        payable(to).transfer(amount);
+        (bool ok, ) = payable(to).call{value: amount}("");
+        require(ok, "Transfer failed");
         emit TreasuryWithdrawal(to, amount, msg.sender);
     }
 }
