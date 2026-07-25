@@ -1,5 +1,6 @@
 import { ethers } from "hardhat";
 import { registerJobForMonitoring } from "../lib/auditx/client";
+import { invalidateCache } from "../lib/indexing/aggregate";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -16,6 +17,10 @@ export async function listenAndMonitorJobs(factoryAddress: string) {
 
   factory.on("JobDeployed", async (jobContract: string, client: string) => {
     console.log(`JobDeployed detected: ${jobContract} (client: ${client})`);
+    
+    // Invalidate platform-wide analytics cache so the new job is included immediately
+    invalidateCache();
+
     const registered = await registerJobForMonitoring(jobContract);
     if (!registered) {
       // Job still posts successfully — monitoring is additive, not a
