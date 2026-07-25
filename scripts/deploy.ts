@@ -8,6 +8,7 @@ export interface DeploymentAddresses {
   ReputationSBT: string;
   ProfileRegistry: string;
   GithubReputationRegistry: string;
+  TimelockController: string;
   JudgeDAO: string;
   deployedAt: string;
   network: string;
@@ -27,26 +28,24 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
   console.log("Balance:", ethers.formatEther(await ethers.provider.getBalance(deployer.address)), "MATIC");
   console.log("═══════════════════════════════════════\n");
 
-  // ── 1. JobEscrow implementation (deployed once, cloned per job) ──
-  console.log("1/6 Deploying JobEscrow implementation...");
+  // ── 1. JobEscrow implementation ──
+  console.log("1/7 Deploying JobEscrow implementation...");
   const JobEscrow = await ethers.getContractFactory("JobEscrow");
   const jobEscrowImpl = await JobEscrow.deploy();
   await jobEscrowImpl.waitForDeployment();
   const jobEscrowImplAddr = await jobEscrowImpl.getAddress();
   console.log("    ✓", jobEscrowImplAddr);
 
-  // ── 2. ReputationSBT (needs factory address, so deploy factory first ──
-  //     with a placeholder, OR restructure to grant MINTER_ROLE post-deploy —
-  //     going with post-deploy grant since it's cleaner than a 2-step constructor dance)
-  console.log("2/6 Deploying ReputationSBT...");
+  // ── 2. ReputationSBT ──
+  console.log("2/7 Deploying ReputationSBT...");
   const ReputationSBT = await ethers.getContractFactory("ReputationSBT");
-  const sbt = await ReputationSBT.deploy(deployer.address); // deployer temporarily, re-granted below
+  const sbt = await ReputationSBT.deploy(deployer.address);
   await sbt.waitForDeployment();
   const sbtAddr = await sbt.getAddress();
   console.log("    ✓", sbtAddr);
 
   // ── 3. JobFactory ──
-  console.log("3/6 Deploying JobFactory...");
+  console.log("3/7 Deploying JobFactory...");
   const JobFactory = await ethers.getContractFactory("JobFactory");
   const factory = await JobFactory.deploy(jobEscrowImplAddr, sbtAddr);
   await factory.waitForDeployment();
@@ -63,7 +62,7 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
   console.log("    ✓ MINTER_ROLE moved to JobFactory, revoked from deployer");
 
   // ── 4. ProfileRegistry ──
-  console.log("4/6 Deploying ProfileRegistry...");
+  console.log("4/7 Deploying ProfileRegistry...");
   const ProfileRegistry = await ethers.getContractFactory("ProfileRegistry");
   const profileRegistry = await ProfileRegistry.deploy();
   await profileRegistry.waitForDeployment();
@@ -71,29 +70,48 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
   console.log("    ✓", profileRegistryAddr);
 
   // ── 5. GithubReputationRegistry ──
-  console.log("5/6 Deploying GithubReputationRegistry...");
+  console.log("5/7 Deploying GithubReputationRegistry...");
   const GithubReputationRegistry = await ethers.getContractFactory("GithubReputationRegistry");
   const githubRegistry = await GithubReputationRegistry.deploy();
   await githubRegistry.waitForDeployment();
   const githubRegistryAddr = await githubRegistry.getAddress();
   console.log("    ✓", githubRegistryAddr);
 
-  // ── 6. JudgeDAO (needs SBT as the votes token — SBT already deployed) ──
-  console.log("6/6 Deploying JudgeDAO...");
+  // ── 6. TimelockController (2-day minDelay = 172800s) ──
+  console.log("6/7 Deploying TimelockController (2-day delay)...");
+  const TimelockController = await ethers.getContractFactory("TimelockController");
+  const timelock = await TimelockController.deploy(
+    172800, // 2 days minDelay
+    [],     // proposers (granted to JudgeDAO below)
+    [ethers.ZeroAddress], // executors (open execution once delay expires)
+    deployer.address
+  );
+  await timelock.waitForDeployment();
+  const timelockAddr = await timelock.getAddress();
+  console.log("    ✓", timelockAddr);
+
+  // ── 7. JudgeDAO (bound to ReputationSBT and TimelockController) ──
+  console.log("7/7 Deploying JudgeDAO...");
   const JudgeDAO = await ethers.getContractFactory("JudgeDAO");
-  const judgeDAO = await JudgeDAO.deploy(sbtAddr);
+  const judgeDAO = await JudgeDAO.deploy(sbtAddr, timelockAddr);
   await judgeDAO.waitForDeployment();
   const judgeDAOAddr = await judgeDAO.getAddress();
   console.log("    ✓", judgeDAOAddr);
 
-  // ── Write manifest — single source of truth, learned this the hard
-  //     way across this whole project's earlier address-chaos problems ──
+  // Grant JudgeDAO PROPOSER_ROLE on TimelockController
+  const PROPOSER_ROLE = await timelock.PROPOSER_ROLE();
+  tx = await timelock.grantRole(PROPOSER_ROLE, judgeDAOAddr);
+  await tx.wait();
+  console.log("    ✓ PROPOSER_ROLE on TimelockController granted to JudgeDAO");
+
+  // Write manifest
   const addresses: DeploymentAddresses = {
     JobEscrowImplementation: jobEscrowImplAddr,
     JobFactory: factoryAddr,
     ReputationSBT: sbtAddr,
     ProfileRegistry: profileRegistryAddr,
     GithubReputationRegistry: githubRegistryAddr,
+    TimelockController: timelockAddr,
     JudgeDAO: judgeDAOAddr,
     deployedAt: new Date().toISOString(),
     network,
@@ -106,10 +124,30 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
   const manifestPath = path.join(deploymentsDir, `${network}_addresses.json`);
   fs.writeFileSync(manifestPath, JSON.stringify(addresses, null, 2));
 
-  // Also maintain root amoy_deployment_addresses.json for backwards compatibility if network is amoy
   if (network === "amoy" || network === "polygonAmoy") {
     const rootPath = path.join(__dirname, "..", "amoy_deployment_addresses.json");
-    fs.writeFileSync(rootPath, JSON.stringify({ network, chainId: "80002", deployedAt: addresses.deployedAt, deployer: deployer.address, contracts: { JobEscrowImpl: jobEscrowImplAddr, ReputationSBT: sbtAddr, JobFactory: factoryAddr, ProfileRegistry: profileRegistryAddr, GithubReputationRegistry: githubRegistryAddr, JudgeDAO: judgeDAOAddr } }, null, 2));
+    fs.writeFileSync(
+      rootPath,
+      JSON.stringify(
+        {
+          network,
+          chainId: "80002",
+          deployedAt: addresses.deployedAt,
+          deployer: deployer.address,
+          contracts: {
+            JobEscrowImpl: jobEscrowImplAddr,
+            ReputationSBT: sbtAddr,
+            JobFactory: factoryAddr,
+            ProfileRegistry: profileRegistryAddr,
+            GithubReputationRegistry: githubRegistryAddr,
+            TimelockController: timelockAddr,
+            JudgeDAO: judgeDAOAddr,
+          },
+        },
+        null,
+        2
+      )
+    );
   }
 
   console.log("\n═══════════════════════════════════════");

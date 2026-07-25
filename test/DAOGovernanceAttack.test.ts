@@ -1,11 +1,12 @@
 import { expect } from "chai";
-import { ethers, network } from "hardhat";
+import { ethers } from "hardhat";
 import { mine } from "@nomicfoundation/hardhat-network-helpers";
-import { JudgeDAO, ReputationSBT, JobFactory, JobEscrow } from "../typechain-types";
+import { JudgeDAO, ReputationSBT, JobFactory, JobEscrow, TimelockController } from "../typechain-types";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 describe("Phase 7 — Governance attack surface", function () {
   let judgeDAO: JudgeDAO;
+  let timelock: TimelockController;
   let sbt: ReputationSBT;
   let factory: JobFactory;
   let jobImpl: JobEscrow;
@@ -15,6 +16,7 @@ describe("Phase 7 — Governance attack surface", function () {
 
   const VOTING_DELAY_BLOCKS = 86400;
   const VOTING_PERIOD_BLOCKS = 7 * 86400;
+  const TIMELOCK_DELAY_SECONDS = 2 * 24 * 60 * 60;
 
   beforeEach(async function () {
     [deployer, holder1, maliciousCandidate] = await ethers.getSigners();
@@ -37,14 +39,28 @@ describe("Phase 7 — Governance attack surface", function () {
     // Mint 1 SBT to holder1 to give them 1 vote
     await sbt.mint(holder1.address, ethers.ZeroAddress);
 
-    judgeDAO = await ethers.deployContract("JudgeDAO", [await sbt.getAddress()]);
+    timelock = await ethers.deployContract("TimelockController", [
+      TIMELOCK_DELAY_SECONDS,
+      [],
+      [ethers.ZeroAddress],
+      deployer.address,
+    ]);
+    await timelock.waitForDeployment();
+
+    judgeDAO = await ethers.deployContract("JudgeDAO", [
+      await sbt.getAddress(),
+      await timelock.getAddress(),
+    ]);
     await judgeDAO.waitForDeployment();
 
+    const PROPOSER_ROLE = await timelock.PROPOSER_ROLE();
+    await timelock.grantRole(PROPOSER_ROLE, await judgeDAO.getAddress());
+
     const DEFAULT_ADMIN_ROLE = await factory.DEFAULT_ADMIN_ROLE();
-    await factory.grantRole(DEFAULT_ADMIN_ROLE, await judgeDAO.getAddress());
+    await factory.grantRole(DEFAULT_ADMIN_ROLE, await timelock.getAddress());
   });
 
-  it("proves quorum=1 risk: a single SBT holder can pass a proposal when total active supply is low", async function () {
+  it("proves quorum percentage risk: a single SBT holder can pass a proposal when total active supply is low", async function () {
     const ARBITRATOR_ROLE = await factory.ARBITRATOR_ROLE();
     const calldata = factory.interface.encodeFunctionData("grantRole", [
       ARBITRATOR_ROLE,
@@ -78,8 +94,15 @@ describe("Phase 7 — Governance attack surface", function () {
     // Advance past voting period
     await mine(VOTING_PERIOD_BLOCKS + 1);
 
-    // Proposal passes because quorum = 1
+    // Proposal passes
     expect(await judgeDAO.state(proposalId)).to.equal(4n); // Succeeded
+
+    // Queue proposal into TimelockController
+    await judgeDAO.queue([await factory.getAddress()], [0], [calldata], descriptionHash);
+
+    // Advance past timelock delay
+    await network.provider.send("evm_increaseTime", [TIMELOCK_DELAY_SECONDS + 1]);
+    await network.provider.send("evm_mine");
 
     // Execution succeeds
     await judgeDAO.execute(
@@ -89,7 +112,7 @@ describe("Phase 7 — Governance attack surface", function () {
       descriptionHash
     );
 
-    // Malicious candidate now holds ARBITRATOR_ROLE — confirming MVP quorum risk
+    // Malicious candidate now holds ARBITRATOR_ROLE — confirming bootstrap quorum behavior
     expect(await factory.hasRole(ARBITRATOR_ROLE, maliciousCandidate.address)).to.be.true;
   });
 });

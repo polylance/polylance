@@ -30,6 +30,7 @@ describe("Deployment & Bootstrap Scripts Pipeline", function () {
     expect(addresses.ReputationSBT).to.be.properAddress;
     expect(addresses.ProfileRegistry).to.be.properAddress;
     expect(addresses.GithubReputationRegistry).to.be.properAddress;
+    expect(addresses.TimelockController).to.be.properAddress;
     expect(addresses.JudgeDAO).to.be.properAddress;
 
     const manifestPath = path.join(__dirname, "..", "deployments", "hardhat_addresses.json");
