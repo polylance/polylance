@@ -79,7 +79,7 @@ contract JobEscrow is Initializable, ReentrancyGuard {
     }
 
     // ── Funding — can happen anytime while Open or Selected, freelancer not required yet ──
-    function fundJob() external payable {
+    function fundJob() external payable nonReentrant {
         require(msg.sender == client, "Only client funds");
         require(status == JobStatus.Open || status == JobStatus.Selected, "Wrong status");
         amount += msg.value;
