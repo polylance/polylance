@@ -41,6 +41,8 @@ contract GithubReputationRegistry is AccessControl {
         require(!usedAttestations[attestationUID], "Already used");
 
         bytes32 messageHash = keccak256(abi.encodePacked(
+            block.chainid,
+            address(this),
             msg.sender,
             primaryCategory,
             primaryScore,

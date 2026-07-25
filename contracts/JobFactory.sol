@@ -39,15 +39,20 @@ contract JobFactory is AccessControl {
         return allJobs;
     }
 
+    function isJobContract(address job) external view returns (bool) {
+        return isJob[job];
+    }
+
     /// @notice Only callable by clone contracts created by this factory.
     function collectFee() external payable {
-        require(isJob[msg.sender], "Only registered job contracts");
+        require(isJob[msg.sender], "Caller is not a registered job contract");
         treasuryBalance += msg.value;
         emit FeeCollected(msg.sender, msg.value);
     }
 
     function mintReputationSBT(address to, address jobContract) external {
-        require(isJob[msg.sender], "Only registered job contracts");
+        require(isJob[msg.sender], "Caller is not a registered job contract");
+        require(jobContract == msg.sender, "Job contract must mint for itself");
         reputationSBT.mint(to, jobContract);
     }
 

@@ -82,13 +82,13 @@ describe("HiddenEdgeCases & Security Bounds", function () {
     it("should reject direct fee collection from non-job contracts", async function () {
       await expect(
         factory.connect(attacker).collectFee({ value: ethers.parseEther("0.1") })
-      ).to.be.revertedWith("Only registered job contracts");
+      ).to.be.revertedWith("Caller is not a registered job contract");
     });
 
     it("should reject direct mintReputationSBT calls from non-job contracts", async function () {
       await expect(
         factory.connect(attacker).mintReputationSBT(attacker.address, ethers.ZeroAddress)
-      ).to.be.revertedWith("Only registered job contracts");
+      ).to.be.revertedWith("Caller is not a registered job contract");
     });
 
     it("should enforce TREASURY_ADMIN_ROLE for treasury withdrawals", async function () {

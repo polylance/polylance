@@ -14,11 +14,9 @@ describe("GithubReputationRegistry", function () {
   const secondaryCategories = [ethers.encodeBytes32String("web")];
   const secondaryScores = [400n];
 
-  /**
-   * Build the same message hash the contract builds:
-   *   keccak256(abi.encodePacked(user, primary, primaryScore, secondaries, secondaryScores, uid))
-   */
   function buildMessageHash(
+    chainId: bigint,
+    registryAddress: string,
     userAddr: string,
     primCat: string,
     primScore: bigint,
@@ -27,8 +25,8 @@ describe("GithubReputationRegistry", function () {
     uid: string
   ): string {
     return ethers.solidityPackedKeccak256(
-      ["address", "bytes32", "uint256", "bytes32[]", "uint256[]", "bytes32"],
-      [userAddr, primCat, primScore, secCats, secScores, uid]
+      ["uint256", "address", "address", "bytes32", "uint256", "bytes32[]", "uint256[]", "bytes32"],
+      [chainId, registryAddress, userAddr, primCat, primScore, secCats, secScores, uid]
     );
   }
 
@@ -36,9 +34,6 @@ describe("GithubReputationRegistry", function () {
     [oracle, user, attacker] = await ethers.getSigners();
     registry = await ethers.deployContract("GithubReputationRegistry");
     await registry.waitForDeployment();
-
-    // Grant ORACLE_OPERATOR_ROLE to oracle (deployer already has it by default)
-    // Just use the deployer (oracle) who already has the role from constructor
   });
 
   function makeUID(): string {
@@ -46,7 +41,10 @@ describe("GithubReputationRegistry", function () {
   }
 
   async function makeValidAttestation(userAddr: string, uid: string) {
+    const chainId = (await ethers.provider.getNetwork()).chainId;
     const msgHash = buildMessageHash(
+      chainId,
+      await registry.getAddress(),
       userAddr,
       primaryCategory,
       primaryScore,
@@ -54,12 +52,8 @@ describe("GithubReputationRegistry", function () {
       secondaryScores,
       uid
     );
-    // oracle (signer[0]) signs the eth-prefixed hash
-    const signature = await oracle.signMessage(ethers.getBytes(msgHash));
-    return signature;
+    return await oracle.signMessage(ethers.getBytes(msgHash));
   }
-
-  // ── Valid oracle signature ──────────────────────────────────────────────────
 
   it("accepts a valid oracle signature and stores the profile", async function () {
     const uid = makeUID();
@@ -85,11 +79,12 @@ describe("GithubReputationRegistry", function () {
     expect(profile.oracleOperator).to.equal(oracle.address);
   });
 
-  // ── Non-oracle signer rejected ──────────────────────────────────────────────
-
   it("rejects a signature from a non-oracle address", async function () {
     const uid = makeUID();
+    const chainId = (await ethers.provider.getNetwork()).chainId;
     const msgHash = buildMessageHash(
+      chainId,
+      await registry.getAddress(),
       user.address,
       primaryCategory,
       primaryScore,
@@ -97,7 +92,6 @@ describe("GithubReputationRegistry", function () {
       secondaryScores,
       uid
     );
-    // attacker signs instead of oracle
     const sig = await attacker.signMessage(ethers.getBytes(msgHash));
 
     await expect(
@@ -112,13 +106,10 @@ describe("GithubReputationRegistry", function () {
     ).to.be.revertedWith("Not an authorized oracle");
   });
 
-  // ── Replayed attestationUID rejected ───────────────────────────────────────
-
   it("rejects a replayed attestationUID", async function () {
     const uid = makeUID();
     const sig = await makeValidAttestation(user.address, uid);
 
-    // First submission succeeds
     await registry.connect(user).submitSkillVerification(
       primaryCategory,
       primaryScore,
@@ -128,7 +119,6 @@ describe("GithubReputationRegistry", function () {
       sig
     );
 
-    // Second submission with same UID must revert
     await expect(
       registry.connect(user).submitSkillVerification(
         primaryCategory,
@@ -141,7 +131,32 @@ describe("GithubReputationRegistry", function () {
     ).to.be.revertedWith("Already used");
   });
 
-  // ── Mismatched arrays rejected ──────────────────────────────────────────────
+  it("rejects a signature signed for a different chainId (Section 6 fix)", async function () {
+    const uid = makeUID();
+    const wrongChainId = 999999n;
+    const msgHash = buildMessageHash(
+      wrongChainId,
+      await registry.getAddress(),
+      user.address,
+      primaryCategory,
+      primaryScore,
+      secondaryCategories,
+      secondaryScores,
+      uid
+    );
+    const sig = await oracle.signMessage(ethers.getBytes(msgHash));
+
+    await expect(
+      registry.connect(user).submitSkillVerification(
+        primaryCategory,
+        primaryScore,
+        secondaryCategories,
+        secondaryScores,
+        uid,
+        sig
+      )
+    ).to.be.revertedWith("Not an authorized oracle");
+  });
 
   it("rejects mismatched secondary array lengths", async function () {
     const uid = makeUID();
@@ -152,7 +167,7 @@ describe("GithubReputationRegistry", function () {
         primaryCategory,
         primaryScore,
         secondaryCategories,
-        [], // wrong length
+        [],
         uid,
         sig
       )
