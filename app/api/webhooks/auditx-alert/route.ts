@@ -1,38 +1,36 @@
-import crypto from "crypto";
-import { storeAlert } from "../../../../lib/alerts/store";
+import { verifyAuditXSignature } from "../../../../lib/auditx/verifyWebhook";
+import { storeAlert, AuditXAlertPayload } from "../../../../lib/alerts/store";
 import { notifyAdmins } from "../../../../lib/notifications";
 
-function verifySignature(rawBody: string, signatureHeader: string | null): boolean {
-  if (!signatureHeader) return false;
-  const secret = process.env.AUDITX_WEBHOOK_SECRET;
-  if (!secret) return false;
-
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(rawBody)
-    .digest("hex");
-
-  const expectedBuf = Buffer.from(expected);
-  const receivedBuf = Buffer.from(signatureHeader);
-  if (expectedBuf.length !== receivedBuf.length) return false;
-  return crypto.timingSafeEqual(expectedBuf, receivedBuf);
-}
-
 export async function POST(req: Request) {
-  const rawBody = await req.text(); // read raw text BEFORE parsing — sign/verify the actual bytes received
+  const rawBody = await req.text();
   const signature = req.headers.get("x-auditx-signature");
 
-  if (!verifySignature(rawBody, signature)) {
-    console.warn("Rejected AuditX webhook: invalid signature", {
+  if (!verifyAuditXSignature(rawBody, signature)) {
+    // Log the attempt — repeated failures here could indicate someone
+    // probing the endpoint, worth knowing about even though we reject it
+    console.warn("Rejected webhook: invalid signature", {
       ip: req.headers.get("x-forwarded-for"),
     });
     return Response.json({ error: "Invalid signature" }, { status: 401 });
   }
 
-  const payload = JSON.parse(rawBody);
+  let payload: AuditXAlertPayload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return Response.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (!payload.contractAddress || !payload.severity || !payload.description) {
+    return Response.json({ error: "Missing required fields" }, { status: 400 });
+  }
+
+  // Idempotency: AuditX's own retry-on-failure logic (or a network
+  // blip) could deliver the same alert twice — dedupe on a content hash
   const alertId = await storeAlert(payload);
   if (alertId === null) {
-    return Response.json({ status: "duplicate" }, { status: 200 });
+    return Response.json({ status: "duplicate, already recorded" }, { status: 200 });
   }
 
   if (payload.severity === "CRITICAL" || payload.severity === "HIGH") {

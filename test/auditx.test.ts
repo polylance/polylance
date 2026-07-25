@@ -145,7 +145,7 @@ describe("AuditX Security Monitoring & Webhook Integration", function () {
       });
       const res2 = await webhookHandler(req2);
       expect(res2.status).to.equal(200);
-      expect((await res2.json()).status).to.equal("duplicate");
+      expect((await res2.json()).status).to.equal("duplicate, already recorded");
     });
   });
 });
