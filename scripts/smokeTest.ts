@@ -1,56 +1,66 @@
 import { ethers } from "hardhat";
 import * as fs from "fs";
 
+const KNOWN_PUBLIC_TEST_ADDRESSES = [
+  "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", // Hardhat default #0
+  "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", // Hardhat default #1
+  "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC", // Hardhat default #2
+];
+
+async function assertRealNetwork() {
+  const network = await ethers.provider.getNetwork();
+
+  if (network.name === "hardhat" || network.name === "unknown" || network.chainId === 31337n) {
+    throw new Error(
+      `Refusing to run smoke test — connected to ephemeral local network ` +
+      `(chainId ${network.chainId}), not Amoy. Did you forget the ` +
+      `--network amoy flag? Run: npx hardhat run --network amoy <script>`
+    );
+  }
+
+  if (network.chainId !== 80002n) {
+    throw new Error(
+      `Refusing to run — expected Amoy (chainId 80002), got chainId ${network.chainId}. ` +
+      `Check your --network flag and hardhat.config.ts.`
+    );
+  }
+}
+
+async function assertNotPublicTestAccount(address: string, label: string) {
+  if (KNOWN_PUBLIC_TEST_ADDRESSES.map((a) => a.toLowerCase()).includes(address.toLowerCase())) {
+    throw new Error(
+      `SECURITY: ${label} address (${address}) is a publicly known ` +
+      `Hardhat test account. This must never appear in a real-network ` +
+      `smoke test — it means the wrong private key is loaded, or you're ` +
+      `actually still connected to the local network despite the flag.`
+    );
+  }
+}
+
 async function main() {
+  await assertRealNetwork();
+
+  const clientPrivateKey = process.env.CLIENT_PRIVATE_KEY || process.env.PRIVATE_KEY;
+  const freelancerPrivateKey = process.env.FREELANCER_PRIVATE_KEY;
+
+  if (!clientPrivateKey || !freelancerPrivateKey) {
+    throw new Error("CLIENT_PRIVATE_KEY and FREELANCER_PRIVATE_KEY env vars are required for live testnet smoke test.");
+  }
+
+  const clientWallet = new ethers.Wallet(clientPrivateKey, ethers.provider);
+  const freelancerWallet = new ethers.Wallet(freelancerPrivateKey, ethers.provider);
+
+  await assertNotPublicTestAccount(clientWallet.address, "Client");
+  await assertNotPublicTestAccount(freelancerWallet.address, "Freelancer");
+
   const network = (await ethers.provider.getNetwork()).name;
   const manifestPath = `./deployments/${network}_addresses.json`;
-  const signers = await ethers.getSigners();
 
-  let clientWallet: any;
-  let freelancerWallet: any;
-  let addresses: any;
-
-  if (network === "hardhat" || network === "localhost") {
-    clientWallet = signers[0];
-    freelancerWallet = signers[1];
-
-    console.log("Deploying fresh contracts on local ephemeral network for smoke test...");
-    const jobImpl = await ethers.deployContract("JobEscrow");
-    await jobImpl.waitForDeployment();
-
-    const sbt = await ethers.deployContract("ReputationSBT", [clientWallet.address]);
-    await sbt.waitForDeployment();
-
-    const factoryContract = await ethers.deployContract("JobFactory", [
-      await jobImpl.getAddress(),
-      await sbt.getAddress(),
-    ]);
-    await factoryContract.waitForDeployment();
-
-    const MINTER_ROLE = await sbt.MINTER_ROLE();
-    await sbt.grantRole(MINTER_ROLE, await factoryContract.getAddress());
-
-    addresses = {
-      JobEscrowImplementation: await jobImpl.getAddress(),
-      JobFactory: await factoryContract.getAddress(),
-      ReputationSBT: await sbt.getAddress(),
-    };
-  } else {
-    if (!fs.existsSync(manifestPath)) {
-      throw new Error(`Deployment manifest not found at ${manifestPath}. Run deploy.ts first.`);
-    }
-    addresses = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
-
-    const clientPrivateKey = process.env.CLIENT_PRIVATE_KEY || process.env.PRIVATE_KEY;
-    const freelancerPrivateKey = process.env.FREELANCER_PRIVATE_KEY;
-
-    if (!clientPrivateKey || !freelancerPrivateKey) {
-      throw new Error("CLIENT_PRIVATE_KEY and FREELANCER_PRIVATE_KEY env vars are required for live testnet smoke test.");
-    }
-
-    clientWallet = new ethers.Wallet(clientPrivateKey, ethers.provider);
-    freelancerWallet = new ethers.Wallet(freelancerPrivateKey, ethers.provider);
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`Deployment manifest not found at ${manifestPath}. Run deploy.ts first.`);
   }
+
+  const addresses = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
 
   console.log("═══════════════════════════════════════");
   console.log(` PolyLance Live Smoke Test — ${network}`);
@@ -117,7 +127,7 @@ async function main() {
   );
   receipt = await tx.wait();
   console.log("    ✓ tx:", receipt!.hash);
-  console.log("    ✓ On-chain status():", (await job.status()).toString(), "(3 = Submitted)");
+  console.log("    ✓ On-chain status():", (await job.status()).toString(), "(expected: 2 = Submitted)");
 
   // ── 7. Client releases payment ──
   console.log("7/8 Client releasing payment...");
