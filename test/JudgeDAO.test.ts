@@ -62,7 +62,7 @@ describe("JudgeDAO — Dynamic Quorum & Timelock Integration", function () {
     await factory.grantRole(DEFAULT_ADMIN_ROLE, await timelock.getAddress());
 
     // Mint an SBT to deployer by completing a job
-    const tx = await factory.connect(sbtHolder).postJob("QmJob");
+    const tx = await factory.connect(sbtHolder).postJob("QmJob", ethers.ZeroAddress);
     const receipt = await tx.wait();
     const event = receipt?.logs
       .map((log) => {
@@ -75,7 +75,7 @@ describe("JudgeDAO — Dynamic Quorum & Timelock Integration", function () {
 
     await job.connect(deployer).applyToJob("QmProposal");
     await job.connect(sbtHolder).selectFreelancer(deployer.address);
-    await job.connect(sbtHolder).fundJob({ value: ethers.parseEther("1") });
+    await job.connect(sbtHolder).fundJob(0, { value: ethers.parseEther("1") });
     await job.connect(deployer).submitWork("Done", "desc", ["QmEv"]);
     await job.connect(sbtHolder).releasePayment();
   });

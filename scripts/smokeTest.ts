@@ -74,7 +74,7 @@ async function main() {
 
   // ── 1. Post a real job ──
   console.log("1/8 Posting job...");
-  let tx = await factory.postJob("ipfs://smoke-test-job-description");
+  let tx = await factory.postJob("ipfs://smoke-test-job-description", ethers.ZeroAddress);
   let receipt = await tx.wait();
   console.log("    ✓ tx:", receipt!.hash);
 
@@ -87,7 +87,7 @@ async function main() {
   // ── 2. Fund it ──
   console.log("2/8 Funding job with test MATIC...");
   const fundAmount = ethers.parseEther("0.01"); // small amount
-  tx = await job.connect(clientWallet).fundJob({ value: fundAmount });
+  tx = await job.connect(clientWallet).fundJob(0, { value: fundAmount });
   receipt = await tx.wait();
   console.log("    ✓ tx:", receipt!.hash);
   console.log("    ✓ On-chain amount():", ethers.formatEther(await job.amount()), "MATIC");

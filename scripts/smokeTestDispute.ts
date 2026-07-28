@@ -77,7 +77,7 @@ async function main() {
 
   // 1. Post job
   console.log("1/7 Posting dispute test job...");
-  let tx = await factory.postJob("ipfs://dispute-test-job-description");
+  let tx = await factory.postJob("ipfs://dispute-test-job-description", ethers.ZeroAddress);
   await tx.wait();
   const jobs = await factory.getAllJobs();
   const jobAddress = jobs[jobs.length - 1];
@@ -87,7 +87,7 @@ async function main() {
 
   // 2. Fund job
   console.log("2/7 Funding job...");
-  tx = await job.connect(clientWallet).fundJob({ value: ethers.parseEther("0.01") });
+  tx = await job.connect(clientWallet).fundJob(0, { value: ethers.parseEther("0.01") });
   await tx.wait();
 
   // 3. Apply & Select

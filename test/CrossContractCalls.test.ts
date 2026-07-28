@@ -37,11 +37,11 @@ describe("Phase 4 — Cross-contract call verification", function () {
     const ARBITRATOR_ROLE = await factory.ARBITRATOR_ROLE();
     await factory.grantRole(ARBITRATOR_ROLE, judge1.address);
 
-    await factory.connect(client).postJob("ipfs://job-description");
+    await factory.connect(client).postJob("ipfs://job-description", ethers.ZeroAddress);
     const jobs = await factory.getAllJobs();
     job = await ethers.getContractAt("JobEscrow", jobs[0]) as JobEscrow;
 
-    await job.connect(client).fundJob({ value: ethers.parseEther("1.0") });
+    await job.connect(client).fundJob(0, { value: ethers.parseEther("1.0") });
     await job.connect(freelancer).applyToJob("ipfs://proposal");
     await job.connect(client).selectFreelancer(freelancer.address);
     await job.connect(freelancer).submitWork("Delivery", "Done", ["ipfs://evidence"]);

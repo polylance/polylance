@@ -3,9 +3,13 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IJobFactory.sol";
 
 contract JobEscrow is Initializable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     enum JobStatus { Open, Selected, Submitted, Disputed, Completed, Cancelled }
     enum DisputeReason { QUALITY, NON_DELIVERY, SCOPE_DISAGREEMENT, PAYMENT_DISPUTE, OTHER }
 
@@ -33,6 +37,7 @@ contract JobEscrow is Initializable, ReentrancyGuard {
     address public factory;
     address public client;
     address public freelancer;
+    address public paymentToken; // address(0) = native MATIC, otherwise ERC20 token address
     uint256 public amount;
     JobStatus public status;
     string  public descriptionIpfsHash;
@@ -49,7 +54,7 @@ contract JobEscrow is Initializable, ReentrancyGuard {
     Dispute public dispute;
     string public disputeResponseIpfsHash;
 
-    event JobPosted(address client, string descriptionIpfsHash);
+    event JobPosted(address client, string descriptionIpfsHash, address paymentToken);
     event ApplicationSubmitted(address applicant);
     event FreelancerSelected(address freelancer);
     event SelectionDeclined();
@@ -69,21 +74,38 @@ contract JobEscrow is Initializable, ReentrancyGuard {
         _;
     }
 
-    function initialize(address _client, string calldata _descriptionIpfsHash, uint256 _reviewPeriod) external initializer {
+    function initialize(
+        address _client,
+        string calldata _descriptionIpfsHash,
+        uint256 _reviewPeriod,
+        address _paymentToken
+    ) external initializer {
         factory = msg.sender;
         client = _client;
         descriptionIpfsHash = _descriptionIpfsHash;
         reviewPeriod = _reviewPeriod;
+        paymentToken = _paymentToken;
         status = JobStatus.Open;
-        emit JobPosted(_client, _descriptionIpfsHash);
+        emit JobPosted(_client, _descriptionIpfsHash, _paymentToken);
     }
 
-    // ── Funding — can happen anytime while Open or Selected, freelancer not required yet ──
-    function fundJob() external payable nonReentrant {
+    // ── Funding — two distinct paths, same external behavior ──
+    function fundJob(uint256 tokenAmount) external payable nonReentrant {
         require(msg.sender == client, "Only client funds");
         require(status == JobStatus.Open || status == JobStatus.Selected, "Wrong status");
-        amount += msg.value;
-        emit JobFunded(msg.value);
+
+        if (paymentToken == address(0)) {
+            require(msg.value > 0, "Must send MATIC");
+            require(tokenAmount == 0, "Do not pass tokenAmount for native jobs");
+            amount += msg.value;
+            emit JobFunded(msg.value);
+        } else {
+            require(msg.value == 0, "Do not send MATIC for token jobs");
+            require(tokenAmount > 0, "Must specify token amount");
+            IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), tokenAmount);
+            amount += tokenAmount;
+            emit JobFunded(tokenAmount);
+        }
     }
 
     // ── Applications ──
@@ -216,7 +238,14 @@ contract JobEscrow is Initializable, ReentrancyGuard {
         uint256 toFreelancer = (distributable * freelancerBps) / 10000;
         uint256 toClient = distributable - toFreelancer;
 
-        if (fee > 0) IJobFactory(factory).collectFee{value: fee}();
+        if (fee > 0) {
+            if (paymentToken == address(0)) {
+                IJobFactory(factory).collectFee{value: fee}(address(0), fee);
+            } else {
+                IERC20(paymentToken).safeTransfer(factory, fee);
+                IJobFactory(factory).collectFee(paymentToken, fee);
+            }
+        }
         if (toFreelancer > 0) _safeTransfer(freelancer, toFreelancer);
         if (toClient > 0) _safeTransfer(client, toClient);
 
@@ -226,8 +255,13 @@ contract JobEscrow is Initializable, ReentrancyGuard {
         emit PaymentReleased(toFreelancer, fee);
     }
 
-    function _safeTransfer(address to, uint256 val) internal {
-        (bool ok, ) = payable(to).call{value: val}("");
-        require(ok, "Transfer failed");
+    function _safeTransfer(address to, uint256 transferAmount) internal {
+        if (transferAmount == 0) return;
+        if (paymentToken == address(0)) {
+            (bool ok, ) = payable(to).call{value: transferAmount}("");
+            require(ok, "Transfer failed");
+        } else {
+            IERC20(paymentToken).safeTransfer(to, transferAmount);
+        }
     }
 }

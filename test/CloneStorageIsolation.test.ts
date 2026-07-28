@@ -31,17 +31,17 @@ describe("EIP-1167 clone storage isolation", function () {
 
   it("implementation contract itself cannot be re-initialized directly once initialized", async function () {
     // Initializing the implementation once succeeds (or reverts if constructor/initialization logic locks it)
-    await jobImpl.initialize(clientA.address, "ipfs://impl-test", 604800);
+    await jobImpl.initialize(clientA.address, "ipfs://impl-test", 604800, ethers.ZeroAddress);
 
     // Second initialization on implementation must revert
     await expect(
-      jobImpl.initialize(clientB.address, "ipfs://impl-reinit", 604800)
+      jobImpl.initialize(clientB.address, "ipfs://impl-reinit", 604800, ethers.ZeroAddress)
     ).to.be.revertedWithCustomError(jobImpl, "InvalidInitialization");
   });
 
   it("two clones have fully isolated storage — no cross-contamination", async function () {
-    await factory.connect(clientA).postJob("ipfs://jobA");
-    await factory.connect(clientB).postJob("ipfs://jobB");
+    await factory.connect(clientA).postJob("ipfs://jobA", ethers.ZeroAddress);
+    await factory.connect(clientB).postJob("ipfs://jobB", ethers.ZeroAddress);
 
     const jobs = await factory.getAllJobs();
     expect(jobs.length).to.equal(2);
@@ -50,7 +50,7 @@ describe("EIP-1167 clone storage isolation", function () {
     const jobB = await ethers.getContractAt("JobEscrow", jobs[1]) as JobEscrow;
 
     // Fund Job A with 1 ETH
-    await jobA.connect(clientA).fundJob({ value: ethers.parseEther("1.0") });
+    await jobA.connect(clientA).fundJob(0, { value: ethers.parseEther("1.0") });
 
     // Job A balance and amount must be 1 ETH
     expect(await jobA.amount()).to.equal(ethers.parseEther("1.0"));

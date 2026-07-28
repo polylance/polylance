@@ -33,8 +33,8 @@ describe("JobFactory Core & Access Controls", function () {
 
   describe("postJob & isJobContract", function () {
     it("deploys a real clone with a distinct address per job", async function () {
-      await factory.connect(client).postJob("ipfs://desc1");
-      await factory.connect(client).postJob("ipfs://desc2");
+      await factory.connect(client).postJob("ipfs://desc1", ethers.ZeroAddress);
+      await factory.connect(client).postJob("ipfs://desc2", ethers.ZeroAddress);
 
       const jobs = await factory.getAllJobs();
       expect(jobs.length).to.equal(2);
@@ -42,7 +42,7 @@ describe("JobFactory Core & Access Controls", function () {
     });
 
     it("registers the clone as a known job contract", async function () {
-      await factory.connect(client).postJob("ipfs://desc1");
+      await factory.connect(client).postJob("ipfs://desc1", ethers.ZeroAddress);
       const jobs = await factory.getAllJobs();
       expect(await factory.isJobContract(jobs[0])).to.be.true;
       expect(await factory.isJob(jobs[0])).to.be.true;
@@ -62,7 +62,7 @@ describe("JobFactory Core & Access Controls", function () {
     });
 
     it("rejects a registered job contract minting for a DIFFERENT job address", async function () {
-      await factory.connect(client).postJob("ipfs://desc1");
+      await factory.connect(client).postJob("ipfs://desc1", ethers.ZeroAddress);
       const jobs = await factory.getAllJobs();
 
       // Impersonate job 0
@@ -78,7 +78,7 @@ describe("JobFactory Core & Access Controls", function () {
     });
 
     it("allows a real job contract to mint for itself", async function () {
-      await factory.connect(client).postJob("ipfs://desc1");
+      await factory.connect(client).postJob("ipfs://desc1", ethers.ZeroAddress);
       const jobs = await factory.getAllJobs();
 
       const jobSigner = await ethers.getImpersonatedSigner(jobs[0]);
@@ -98,7 +98,7 @@ describe("JobFactory Core & Access Controls", function () {
   describe("Security: collectFee access control", function () {
     it("rejects collectFee called by a non-job address", async function () {
       await expect(
-        factory.connect(attacker).collectFee({ value: ethers.parseEther("1.0") })
+        factory.connect(attacker).collectFee(ethers.ZeroAddress, 0, { value: ethers.parseEther("1.0") })
       ).to.be.revertedWith("Caller is not a registered job contract");
     });
   });
@@ -106,7 +106,7 @@ describe("JobFactory Core & Access Controls", function () {
   describe("Treasury", function () {
     it("only TREASURY_ADMIN_ROLE can withdraw", async function () {
       await expect(
-        factory.connect(attacker).withdrawTreasury(attacker.address, ethers.parseEther("1.0"))
+        factory.connect(attacker).withdrawTreasury(ethers.ZeroAddress, attacker.address, ethers.parseEther("1.0"))
       ).to.be.revertedWithCustomError(factory, "AccessControlUnauthorizedAccount");
     });
 
@@ -115,7 +115,7 @@ describe("JobFactory Core & Access Controls", function () {
       await factory.grantRole(TREASURY_ADMIN_ROLE, deployer.address);
 
       await expect(
-        factory.withdrawTreasury(deployer.address, ethers.parseEther("1000.0"))
+        factory.withdrawTreasury(ethers.ZeroAddress, deployer.address, ethers.parseEther("1000.0"))
       ).to.be.revertedWith("Insufficient treasury balance");
     });
   });

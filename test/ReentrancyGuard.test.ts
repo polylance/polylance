@@ -41,12 +41,12 @@ describe("Security: real reentrancy exploit attempt", function () {
     await attacker.waitForDeployment();
 
     // Post and fund a real job
-    await factory.connect(client).postJob("ipfs://job-description");
+    await factory.connect(client).postJob("ipfs://job-description", ethers.ZeroAddress);
     const jobs = await factory.getAllJobs();
     job = await ethers.getContractAt("JobEscrow", jobs[0]) as JobEscrow;
     await attacker.setTarget(jobs[0]);
 
-    await job.connect(client).fundJob({ value: ethers.parseEther("1.0") });
+    await job.connect(client).fundJob(0, { value: ethers.parseEther("1.0") });
 
     // Attacker contract applies as freelancer
     await attacker.triggerApply();

@@ -47,7 +47,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
   });
 
   async function deployJob(): Promise<JobEscrow> {
-    const tx = await factory.connect(client).postJob("ipfs://job-description");
+    const tx = await factory.connect(client).postJob("ipfs://job-description", ethers.ZeroAddress);
     const receipt = await tx.wait();
     const event = receipt?.logs
       .map((l) => {
@@ -64,7 +64,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
       const job = await deployJob();
       const fundAmount = ethers.parseEther("1.0");
 
-      await job.connect(client).fundJob({ value: fundAmount });
+      await job.connect(client).fundJob(0, { value: fundAmount });
       expect(await job.amount()).to.equal(fundAmount);
       expect(await job.status()).to.equal(0); // Open
 
@@ -137,7 +137,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
 
     beforeEach(async function () {
       job = await deployJob();
-      await job.connect(client).fundJob({ value: ethers.parseEther("1.0") });
+      await job.connect(client).fundJob(0, { value: ethers.parseEther("1.0") });
       await job.connect(freelancer).applyToJob("ipfs://proposal");
       await job.connect(client).selectFreelancer(freelancer.address);
       await job.connect(freelancer).submitWork("Delivery", "Done", ["ipfs://evidence"]);
@@ -171,7 +171,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
 
     it("client cancel refunds locked funds if already funded pre-selection", async function () {
       const job = await deployJob();
-      await job.connect(client).fundJob({ value: ethers.parseEther("1.0") });
+      await job.connect(client).fundJob(0, { value: ethers.parseEther("1.0") });
 
       const balanceBefore = await ethers.provider.getBalance(client.address);
       const tx = await job.connect(client).cancelJob();
@@ -192,7 +192,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
 
     it("requires BOTH parties to consent to mutual cancel", async function () {
       const job = await deployJob();
-      await job.connect(client).fundJob({ value: ethers.parseEther("1.0") });
+      await job.connect(client).fundJob(0, { value: ethers.parseEther("1.0") });
       await job.connect(freelancer).applyToJob("ipfs://proposal");
       await job.connect(client).selectFreelancer(freelancer.address);
 
@@ -219,7 +219,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
 
     beforeEach(async function () {
       job = await deployJob();
-      await job.connect(client).fundJob({ value: ethers.parseEther("1.0") });
+      await job.connect(client).fundJob(0, { value: ethers.parseEther("1.0") });
       await job.connect(freelancer).applyToJob("ipfs://proposal");
       await job.connect(client).selectFreelancer(freelancer.address);
       await job.connect(freelancer).submitWork("Delivery", "Done", ["ipfs://evidence"]);
@@ -282,7 +282,7 @@ describe("JobEscrow — Full Lifecycle & Security Invariants", function () {
       it(`fee + toFreelancer + toClient equals original amount at bps=${bps}`, async function () {
         const job = await deployJob();
         const amount = ethers.parseEther("1.23456789");
-        await job.connect(client).fundJob({ value: amount });
+        await job.connect(client).fundJob(0, { value: amount });
         await job.connect(freelancer).applyToJob("ipfs://proposal");
         await job.connect(client).selectFreelancer(freelancer.address);
         await job.connect(freelancer).submitWork("Delivery", "Done", ["ipfs://evidence"]);

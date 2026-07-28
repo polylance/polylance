@@ -10,7 +10,7 @@ export interface JobEventRecord {
 }
 
 const JOB_ESCROW_ABI = [
-  "event JobPosted(address client, string descriptionIpfsHash)",
+  "event JobPosted(address client, string descriptionIpfsHash, address paymentToken)",
   "event ApplicationSubmitted(address applicant)",
   "event FreelancerSelected(address freelancer)",
   "event SelectionDeclined()",
