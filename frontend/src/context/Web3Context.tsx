@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { ethers } from 'ethers';
 import { DemoRole } from '../types';
+import { RPC_URL } from '../config/contracts';
 
 export const DEMO_WALLETS = {
   visitor: {
@@ -47,6 +49,8 @@ interface Web3ContextType {
   isArbitrator: boolean;
   isTreasuryAdmin: boolean;
   reputationCount: number;
+  provider: ethers.Provider;
+  getSigner: () => Promise<ethers.Signer | null>;
   connectWallet: () => Promise<void>;
   disconnectWallet: () => void;
 }
@@ -64,6 +68,33 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
   const address = customAddress || walletInfo.address;
   const isConnected = currentRole !== 'visitor' || !!customAddress;
 
+  const [provider, setProvider] = useState<ethers.Provider>(() => {
+    if (typeof window !== 'undefined' && (window as any).ethereum) {
+      return new ethers.BrowserProvider((window as any).ethereum);
+    }
+    return new ethers.JsonRpcProvider(RPC_URL);
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).ethereum) {
+      setProvider(new ethers.BrowserProvider((window as any).ethereum));
+    } else {
+      setProvider(new ethers.JsonRpcProvider(RPC_URL));
+    }
+  }, []);
+
+  const getSigner = async (): Promise<ethers.Signer | null> => {
+    if (typeof window !== 'undefined' && (window as any).ethereum) {
+      try {
+        const browserProvider = new ethers.BrowserProvider((window as any).ethereum);
+        return await browserProvider.getSigner();
+      } catch (err) {
+        console.warn('Failed to get signer from window.ethereum:', err);
+      }
+    }
+    return null;
+  };
+
   const setRole = (role: DemoRole) => {
     setCustomAddress(null);
     setCurrentRole(role);
@@ -71,12 +102,11 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const connectWallet = async () => {
-    if (window.ethereum) {
+    if (typeof window !== 'undefined' && (window as any).ethereum) {
       try {
-        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
         if (accounts && accounts[0]) {
           setCustomAddress(accounts[0]);
-          // Let's set role to freelancer by default on connect if no role was set
           if (currentRole === 'visitor') {
             setRole('freelancer');
           }
@@ -85,7 +115,6 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error('User rejected wallet connection', err);
       }
     } else {
-      // Default to visitor role if no browser extension
       setRole('visitor');
     }
   };
@@ -105,6 +134,8 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         isArbitrator: walletInfo.isArbitrator,
         isTreasuryAdmin: walletInfo.isTreasuryAdmin,
         reputationCount: walletInfo.reputationCount,
+        provider,
+        getSigner,
         connectWallet,
         disconnectWallet,
       }}

@@ -36,8 +36,8 @@ export const PostJob: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !description.trim()) {
-      alert('Please fill in title and description.');
+    if (!title.trim() || !description.trim() || !amountUsdc.trim()) {
+      alert('Please fill out all required fields.');
       return;
     }
     if (!isConnected) {
@@ -45,9 +45,8 @@ export const PostJob: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      const descriptionCid = generateIpfsCid({ title, description, category, timestamp: Date.now() });
-      const newJob = postJob(
+    try {
+      const newJob = await postJob(
         {
           title,
           description,
@@ -59,7 +58,10 @@ export const PostJob: React.FC = () => {
       );
       setIsSubmitting(false);
       navigate(`/jobs/${newJob.id}`);
-    }, 600);
+    } catch (err) {
+      console.error(err);
+      setIsSubmitting(false);
+    }
   };
 
   return (
