@@ -435,7 +435,7 @@ export const Profile: React.FC = () => {
                 Self-Claimed Skill Tags (ProfileRegistry.sol):
               </span>
               <div className="flex flex-wrap gap-2">
-                {userProfile.skills.map((sk) => (
+                {userProfile.skills.map((sk: string) => (
                   <span
                     key={sk}
                     className="bg-purple-50 border border-purple-200 text-purple-900 px-3 py-1 rounded-lg text-xs font-mono font-bold"

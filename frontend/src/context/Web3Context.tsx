@@ -1,72 +1,44 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { ethers } from 'ethers';
+import { CONTRACTS } from '../config/contracts';
 import { DemoRole } from '../types';
-import { RPC_URL } from '../config/contracts';
-
-export const DEMO_WALLETS = {
-  visitor: {
-    address: '',
-    label: 'Anonymous Visitor',
-    isArbitrator: false,
-    isTreasuryAdmin: false,
-    reputationCount: 0,
-  },
-  client: {
-    address: '0x9999888877776666555544443333222211110000',
-    label: 'Client (Project Owner)',
-    isArbitrator: false,
-    isTreasuryAdmin: false,
-    reputationCount: 0,
-  },
-  freelancer: {
-    address: '0x3333444455556666777788889999000011112222',
-    label: 'Freelancer (Dev)',
-    isArbitrator: false,
-    isTreasuryAdmin: false,
-    reputationCount: 4, // 4 completed jobs SBT
-  },
-  judge: {
-    address: '0x62cD88889999000011112222333344445555dCba',
-    label: 'Judge / Arbitrator',
-    isArbitrator: true,
-    isTreasuryAdmin: false,
-    reputationCount: 12,
-  },
-  admin: {
-    address: '0x25F6111122223333444455556666777788880e9A',
-    label: 'Treasury Admin (Safe Multisig)',
-    isArbitrator: false,
-    isTreasuryAdmin: true,
-    reputationCount: 1,
-  },
-};
+import JobFactoryABI from '../config/abis/JobFactory.json';
+import ReputationSBTABI from '../config/abis/ReputationSBT.json';
 
 interface Web3ContextType {
-  currentRole: DemoRole;
-  setRole: (role: DemoRole) => void;
   address: string;
   isConnected: boolean;
   isArbitrator: boolean;
   isTreasuryAdmin: boolean;
   reputationCount: number;
-  provider: ethers.Provider;
-  getSigner: () => Promise<ethers.Signer | null>;
+  loading: boolean;
+  error: string | null;
+  currentRole: DemoRole;
+  setRole: (role: DemoRole) => void;
   connectWallet: () => Promise<void>;
   disconnectWallet: () => void;
+  refreshOnChainState: () => Promise<void>;
+  provider: ethers.Provider;
+  getSigner: () => Promise<ethers.Signer | null>;
 }
 
 const Web3Context = createContext<Web3ContextType | undefined>(undefined);
 
 export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentRole, setCurrentRole] = useState<DemoRole>(() => {
-    const saved = localStorage.getItem('polylance_demo_role');
-    return (saved as DemoRole) || 'visitor';
-  });
-  const [customAddress, setCustomAddress] = useState<string | null>(null);
+  const [address, setAddress] = useState<string>('');
+  const [isArbitrator, setIsArbitrator] = useState(false);
+  const [isTreasuryAdmin, setIsTreasuryAdmin] = useState(false);
+  const [reputationCount, setReputationCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const walletInfo = DEMO_WALLETS[currentRole];
-  const address = customAddress || walletInfo.address;
-  const isConnected = currentRole !== 'visitor' || !!customAddress;
+  const [currentRole, setCurrentRole] = useState<DemoRole>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_demo_role');
+      return (saved as DemoRole) || 'visitor';
+    }
+    return 'visitor';
+  });
 
   const browserProviderRef = useRef<ethers.BrowserProvider | null>(null);
   const fallbackProviderRef = useRef<ethers.JsonRpcProvider | null>(null);
@@ -74,7 +46,6 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
   const getActiveProvider = (): ethers.Provider => {
     if (typeof window !== 'undefined' && (window as any).ethereum) {
       if (!browserProviderRef.current) {
-        // Prevent MaxListeners warning by increasing max listeners limit if supported
         if (typeof (window as any).ethereum.setMaxListeners === 'function') {
           try {
             (window as any).ethereum.setMaxListeners(30);
@@ -85,38 +56,97 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
       return browserProviderRef.current;
     }
     if (!fallbackProviderRef.current) {
-      fallbackProviderRef.current = new ethers.JsonRpcProvider(RPC_URL);
+      fallbackProviderRef.current = new ethers.JsonRpcProvider();
     }
     return fallbackProviderRef.current;
   };
 
-  const [provider, setProvider] = useState<ethers.Provider>(() => getActiveProvider());
+  const getAbi = (imported: any) => (Array.isArray(imported) ? imported : imported.abi ?? imported);
 
-  useEffect(() => {
-    const activeProvider = getActiveProvider();
-    setProvider(activeProvider);
+  const loadRealOnChainState = useCallback(async (connectedAddress: string) => {
+    if (!connectedAddress) {
+      setIsArbitrator(false);
+      setIsTreasuryAdmin(false);
+      setReputationCount(0);
+      return;
+    }
 
-    if (typeof window !== 'undefined' && (window as any).ethereum) {
-      const handleAccountsChanged = (accounts: string[]) => {
-        if (accounts && accounts[0]) {
-          setCustomAddress(accounts[0]);
-        } else {
-          setCustomAddress(null);
-        }
-      };
-
-      const ethereumObj = (window as any).ethereum;
-      if (ethereumObj.on) {
-        ethereumObj.on('accountsChanged', handleAccountsChanged);
+    setLoading(true);
+    setError(null);
+    try {
+      if (typeof window === 'undefined' || !(window as any).ethereum) {
+        setIsArbitrator(false);
+        setIsTreasuryAdmin(false);
+        setReputationCount(0);
+        return;
       }
 
-      return () => {
-        if (ethereumObj.removeListener) {
-          ethereumObj.removeListener('accountsChanged', handleAccountsChanged);
-        }
-      };
+      const provider = getActiveProvider();
+      const factory = new ethers.Contract(CONTRACTS.JobFactory, getAbi(JobFactoryABI), provider);
+      const sbt = new ethers.Contract(CONTRACTS.ReputationSBT, getAbi(ReputationSBTABI), provider);
+
+      const [ARBITRATOR_ROLE, TREASURY_ADMIN_ROLE] = await Promise.all([
+        factory.ARBITRATOR_ROLE(),
+        factory.TREASURY_ADMIN_ROLE(),
+      ]);
+
+      const [arbitrator, treasuryAdmin, sbtBalance] = await Promise.all([
+        factory.hasRole(ARBITRATOR_ROLE, connectedAddress),
+        factory.hasRole(TREASURY_ADMIN_ROLE, connectedAddress),
+        sbt.balanceOf(connectedAddress),
+      ]);
+
+      setIsArbitrator(Boolean(arbitrator));
+      setIsTreasuryAdmin(Boolean(treasuryAdmin));
+      setReputationCount(Number(sbtBalance));
+    } catch (err) {
+      console.error('Failed to load on-chain state:', err);
+      setError('Could not load on-chain permissions — check network connection.');
+      // Fail closed: never leave stale/previous-account permissions active
+      setIsArbitrator(false);
+      setIsTreasuryAdmin(false);
+      setReputationCount(0);
+    } finally {
+      setLoading(false);
     }
   }, []);
+
+  const setRole = (role: DemoRole) => {
+    setCurrentRole(role);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('polylance_demo_role', role);
+    }
+  };
+
+  const connectWallet = async () => {
+    if (typeof window === 'undefined' || !(window as any).ethereum) {
+      setError('No wallet extension detected. Install MetaMask or another Web3 wallet.');
+      return;
+    }
+    try {
+      const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
+      if (accounts && accounts[0]) {
+        setAddress(accounts[0]);
+        await loadRealOnChainState(accounts[0]);
+      }
+    } catch (err) {
+      console.error('Wallet connection rejected or failed:', err);
+      setError('Wallet connection was rejected.');
+    }
+  };
+
+  const disconnectWallet = () => {
+    setAddress('');
+    setIsArbitrator(false);
+    setIsTreasuryAdmin(false);
+    setReputationCount(0);
+    setError(null);
+    setCurrentRole('visitor');
+  };
+
+  const refreshOnChainState = async () => {
+    if (address) await loadRealOnChainState(address);
+  };
 
   const getSigner = async (): Promise<ethers.Signer | null> => {
     if (typeof window !== 'undefined' && (window as any).ethereum) {
@@ -126,55 +156,59 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         return await browserProviderRef.current.getSigner();
       } catch (err) {
-        console.warn('Failed to get signer from window.ethereum:', err);
+        console.warn('Failed to get signer:', err);
       }
     }
     return null;
   };
 
-  const setRole = (role: DemoRole) => {
-    setCustomAddress(null);
-    setCurrentRole(role);
-    localStorage.setItem('polylance_demo_role', role);
-  };
+  useEffect(() => {
+    if (typeof window === 'undefined' || !(window as any).ethereum) return;
 
-  const connectWallet = async () => {
-    if (typeof window !== 'undefined' && (window as any).ethereum) {
-      try {
-        const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
-        if (accounts && accounts[0]) {
-          setCustomAddress(accounts[0]);
-          if (currentRole === 'visitor') {
-            setRole('freelancer');
-          }
-        }
-      } catch (err) {
-        console.error('User rejected wallet connection', err);
+    const handleAccountsChanged = (accounts: string[]) => {
+      if (accounts && accounts[0]) {
+        setAddress(accounts[0]);
+        loadRealOnChainState(accounts[0]);
+      } else {
+        disconnectWallet();
       }
-    } else {
-      setRole('visitor');
-    }
-  };
+    };
 
-  const disconnectWallet = () => {
-    setCustomAddress(null);
-    setRole('visitor');
-  };
+    const handleChainChanged = () => {
+      window.location.reload();
+    };
+
+    const ethObj = (window as any).ethereum;
+    if (ethObj.on) {
+      ethObj.on('accountsChanged', handleAccountsChanged);
+      ethObj.on('chainChanged', handleChainChanged);
+    }
+
+    return () => {
+      if (ethObj.removeListener) {
+        ethObj.removeListener('accountsChanged', handleAccountsChanged);
+        ethObj.removeListener('chainChanged', handleChainChanged);
+      }
+    };
+  }, [loadRealOnChainState]);
 
   return (
     <Web3Context.Provider
       value={{
+        address,
+        isConnected: Boolean(address),
+        isArbitrator,
+        isTreasuryAdmin,
+        reputationCount,
+        loading,
+        error,
         currentRole,
         setRole,
-        address,
-        isConnected,
-        isArbitrator: walletInfo.isArbitrator,
-        isTreasuryAdmin: walletInfo.isTreasuryAdmin,
-        reputationCount: walletInfo.reputationCount,
-        provider,
-        getSigner,
         connectWallet,
         disconnectWallet,
+        refreshOnChainState,
+        provider: getActiveProvider(),
+        getSigner,
       }}
     >
       {children}
@@ -184,8 +218,6 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useWeb3 = () => {
   const context = useContext(Web3Context);
-  if (!context) {
-    throw new Error('useWeb3 must be used within a Web3Provider');
-  }
+  if (!context) throw new Error('useWeb3 must be used within a Web3Provider');
   return context;
 };
