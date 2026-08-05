@@ -53,6 +53,19 @@ export const Login: React.FC = () => {
     },
   ];
 
+  const handleRealWalletConnect = async (providerName: string) => {
+    setConnectingProvider(providerName);
+    try {
+      await connectWallet();
+      confetti({ particleCount: 80, spread: 70 });
+      navigate('/dashboard');
+    } catch (err) {
+      console.error('Wallet connection failed:', err);
+    } finally {
+      setConnectingProvider(null);
+    }
+  };
+
   const handleWeb2Login = (provider: string) => {
     setConnectingProvider(provider);
     setRole(selectedRole as DemoRole);
@@ -247,18 +260,18 @@ export const Login: React.FC = () => {
           </div>
         </div>
 
-        {/* Web3 Wallets - Mapped to the second mockup layout */}
+        {/* Web3 Wallets */}
         <div className="space-y-4 pt-3 border-t border-slate-100">
           <div className="flex items-center justify-center gap-2 px-3 py-1 bg-purple-50 text-purple-700 rounded-full border border-purple-100 max-w-max mx-auto font-mono text-[9px] font-bold uppercase tracking-widest">
             <span className="h-1.5 w-1.5 rounded-full bg-purple-500 animate-pulse" />
-            <span>Or Connect Web3 Wallet</span>
+            <span>Connect Real Web3 Wallet</span>
           </div>
 
           <h3 className="text-center font-heading text-xl font-bold text-slate-900 leading-tight">
             Connect Your <span className="gradient-text-purple-pink">Wallet</span>
           </h3>
           <p className="text-center text-[11px] text-slate-500 font-sans -mt-2">
-            Choose your preferred wallet to continue to PolyLance
+            Choose your wallet to connect directly to Polygon Amoy Testnet
           </p>
 
           <div className="flex items-center justify-center gap-1.5 -mt-1 pb-2">
@@ -271,8 +284,9 @@ export const Login: React.FC = () => {
             {walletProviders.map((prov) => (
               <button
                 key={prov.id}
+                type="button"
                 disabled={Boolean(connectingProvider)}
-                onClick={() => handleWeb2Login(prov.name)}
+                onClick={() => handleRealWalletConnect(prov.name)}
                 className="w-full flex items-center justify-between p-4 border border-slate-150 rounded-2xl bg-white hover:bg-slate-50/60 transition-all duration-300 group cursor-pointer shadow-3xs hover:shadow-md hover:-translate-y-0.5 relative overflow-hidden disabled:opacity-50"
               >
                 {/* Border Gradient Overlay */}
