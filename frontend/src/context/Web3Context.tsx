@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { ethers } from 'ethers';
 import { DemoRole } from '../types';
 import { RPC_URL } from '../config/contracts';
@@ -68,26 +68,63 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
   const address = customAddress || walletInfo.address;
   const isConnected = currentRole !== 'visitor' || !!customAddress;
 
-  const [provider, setProvider] = useState<ethers.Provider>(() => {
+  const browserProviderRef = useRef<ethers.BrowserProvider | null>(null);
+  const fallbackProviderRef = useRef<ethers.JsonRpcProvider | null>(null);
+
+  const getActiveProvider = (): ethers.Provider => {
     if (typeof window !== 'undefined' && (window as any).ethereum) {
-      return new ethers.BrowserProvider((window as any).ethereum);
+      if (!browserProviderRef.current) {
+        // Prevent MaxListeners warning by increasing max listeners limit if supported
+        if (typeof (window as any).ethereum.setMaxListeners === 'function') {
+          try {
+            (window as any).ethereum.setMaxListeners(30);
+          } catch {}
+        }
+        browserProviderRef.current = new ethers.BrowserProvider((window as any).ethereum);
+      }
+      return browserProviderRef.current;
     }
-    return new ethers.JsonRpcProvider(RPC_URL);
-  });
+    if (!fallbackProviderRef.current) {
+      fallbackProviderRef.current = new ethers.JsonRpcProvider(RPC_URL);
+    }
+    return fallbackProviderRef.current;
+  };
+
+  const [provider, setProvider] = useState<ethers.Provider>(() => getActiveProvider());
 
   useEffect(() => {
+    const activeProvider = getActiveProvider();
+    setProvider(activeProvider);
+
     if (typeof window !== 'undefined' && (window as any).ethereum) {
-      setProvider(new ethers.BrowserProvider((window as any).ethereum));
-    } else {
-      setProvider(new ethers.JsonRpcProvider(RPC_URL));
+      const handleAccountsChanged = (accounts: string[]) => {
+        if (accounts && accounts[0]) {
+          setCustomAddress(accounts[0]);
+        } else {
+          setCustomAddress(null);
+        }
+      };
+
+      const ethereumObj = (window as any).ethereum;
+      if (ethereumObj.on) {
+        ethereumObj.on('accountsChanged', handleAccountsChanged);
+      }
+
+      return () => {
+        if (ethereumObj.removeListener) {
+          ethereumObj.removeListener('accountsChanged', handleAccountsChanged);
+        }
+      };
     }
   }, []);
 
   const getSigner = async (): Promise<ethers.Signer | null> => {
     if (typeof window !== 'undefined' && (window as any).ethereum) {
       try {
-        const browserProvider = new ethers.BrowserProvider((window as any).ethereum);
-        return await browserProvider.getSigner();
+        if (!browserProviderRef.current) {
+          browserProviderRef.current = new ethers.BrowserProvider((window as any).ethereum);
+        }
+        return await browserProviderRef.current.getSigner();
       } catch (err) {
         console.warn('Failed to get signer from window.ethereum:', err);
       }
