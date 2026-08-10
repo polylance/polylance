@@ -34,6 +34,14 @@ contract JobEscrow is Initializable, ReentrancyGuard {
         bool resolved;
     }
 
+    struct TimeExtensionRequest {
+        uint256 requestedDays;
+        string reasonIpfsHash;
+        uint256 requestedAt;
+        bool responded;
+        bool approved;
+    }
+
     address public factory;
     address public client;
     address public freelancer;
@@ -53,6 +61,8 @@ contract JobEscrow is Initializable, ReentrancyGuard {
     ProofOfWork public proof;
     Dispute public dispute;
     string public disputeResponseIpfsHash;
+    TimeExtensionRequest[] public extensionRequests;
+    string[] public progressUpdateHashes; // append-only log of progress updates
 
     event JobPosted(address client, string descriptionIpfsHash, address paymentToken);
     event ApplicationSubmitted(address applicant);
@@ -68,6 +78,10 @@ contract JobEscrow is Initializable, ReentrancyGuard {
     event DisputeRaised(address by, DisputeReason reason, string evidenceIpfsHash);
     event DisputeResponseSubmitted(address by, string responseIpfsHash);
     event DisputeResolved(uint256 freelancerBps, address judge, string reasoningIpfsHash);
+    event ProgressUpdatePosted(uint256 indexed jobId, string updateIpfsHash, uint256 timestamp);
+    event TimeExtensionRequested(uint256 indexed requestIndex, uint256 requestedDays, string reasonIpfsHash);
+    event TimeExtensionResponded(uint256 indexed requestIndex, bool approved);
+    event ModificationRequested(string noteIpfsHash, uint256 timestamp);
 
     modifier onlyParty() {
         require(msg.sender == client || msg.sender == freelancer, "Not a party to this job");
@@ -174,6 +188,50 @@ contract JobEscrow is Initializable, ReentrancyGuard {
         amount = 0;
         if (refund > 0) _safeTransfer(client, refund);
         emit JobCancelled(refund);
+    }
+
+    // ── Extended Workflow & Progress Tracking ──
+    function postProgressUpdate(string calldata updateIpfsHash) external {
+        require(msg.sender == freelancer, "Only freelancer posts progress");
+        require(status == JobStatus.Selected, "Job not in progress");
+        progressUpdateHashes.push(updateIpfsHash);
+        emit ProgressUpdatePosted(0, updateIpfsHash, block.timestamp);
+    }
+
+    function requestTimeExtension(uint256 requestedDays, string calldata reasonIpfsHash) external {
+        require(msg.sender == freelancer, "Only freelancer requests extension");
+        require(status == JobStatus.Selected, "Job not in progress");
+        require(requestedDays > 0 && requestedDays <= 90, "Unreasonable extension request");
+
+        extensionRequests.push(TimeExtensionRequest({
+            requestedDays: requestedDays,
+            reasonIpfsHash: reasonIpfsHash,
+            requestedAt: block.timestamp,
+            responded: false,
+            approved: false
+        }));
+        emit TimeExtensionRequested(extensionRequests.length - 1, requestedDays, reasonIpfsHash);
+    }
+
+    function respondToTimeExtension(uint256 requestIndex, bool approve) external {
+        require(msg.sender == client, "Only client responds");
+        require(requestIndex < extensionRequests.length, "Invalid request");
+        TimeExtensionRequest storage req = extensionRequests[requestIndex];
+        require(!req.responded, "Already responded");
+
+        req.responded = true;
+        req.approved = approve;
+        if (approve) {
+            reviewPeriod += req.requestedDays * 1 days;
+        }
+        emit TimeExtensionResponded(requestIndex, approve);
+    }
+
+    function requestModifications(string calldata noteIpfsHash) external {
+        require(msg.sender == client, "Only client requests modifications");
+        require(status == JobStatus.Submitted, "Nothing to modify yet");
+        status = JobStatus.Selected;
+        emit ModificationRequested(noteIpfsHash, block.timestamp);
     }
 
     // ── Work submission & review ──

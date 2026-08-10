@@ -68,6 +68,17 @@ export async function bootstrapRoles(): Promise<boolean> {
   await tx.wait();
   console.log("    ✓ Oracle operator granted:", ORACLE_SIGNING_ADDRESS);
 
+  // ── 3.5 Approve Polygon Amoy testnet USDC ──
+  const AMOY_USDC = "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582";
+  if (network === "amoy") {
+    const isApproved = await factory.approvedPaymentTokens(AMOY_USDC);
+    if (!isApproved) {
+      tx = await factory.setApprovedPaymentToken(AMOY_USDC, true);
+      await tx.wait();
+      console.log("    ✓ USDC approved as payment token:", AMOY_USDC);
+    }
+  }
+
   // ── 4. Verify every grant actually landed — don't trust tx success alone ──
   console.log("4/5 Verifying role grants...");
   const checks: [string, boolean][] = [
