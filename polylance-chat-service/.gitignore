@@ -1,0 +1,5 @@
+node_modules
+dist
+chat.db
+chat.db-journal
+.env
