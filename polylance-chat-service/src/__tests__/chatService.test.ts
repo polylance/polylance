@@ -1,11 +1,25 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import EthCrypto from "eth-crypto";
+import { ethers } from "ethers";
+import { io as ioClient, Socket as ClientSocket } from "socket.io-client";
 import { recoverPublicKey, createConversationKey, decryptOwnKey, encryptMessage, decryptMessage } from "../crypto/ecies.js";
-import { prisma } from "../server.js";
+import { prisma, server } from "../server.js";
 
-describe("PolyLance Hardened Chat — Security & Crypto-Shredding Invariants", () => {
-  beforeAll(() => {
+const TEST_PORT = 3009;
+const SERVER_URL = `http://localhost:${TEST_PORT}`;
+
+describe("PolyLance Hardened Chat — E2E Socket Security & Crypto Invariants", () => {
+  beforeAll(async () => {
     process.env.NODE_ENV = "test";
+    await new Promise<void>((resolve) => {
+      server.listen(TEST_PORT, () => resolve());
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
 
   it("recovers public key from signature and executes ECIES key exchange", async () => {
@@ -103,32 +117,64 @@ describe("PolyLance Hardened Chat — Security & Crypto-Shredding Invariants", (
     expect(remainingIndex.length).toBe(0);
   });
 
-  it("rejects non-party wallets from accessing or injecting messages", async () => {
-    const jobAddress = "0x7777888899990000111122223333444455556666";
-    const client = "0xaaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
-    const freelancer = "0xbbbb2222bbbb2222bbbb2222bbbb2222bbbb2222";
-    const intruder = "0x9999999999999999999999999999999999999999";
+  it("REAL SOCKET TEST: rejects non-party intruder wallets from joining or injecting messages", async () => {
+    const clientWallet = ethers.Wallet.createRandom();
+    const freelancerWallet = ethers.Wallet.createRandom();
+    const intruderWallet = ethers.Wallet.createRandom();
 
-    const registry = await prisma.conversationKeyRegistry.upsert({
+    const jobAddress = "0x8888777766665555444433332222111100009999";
+
+    // Pre-populate key registry for job
+    const clientIdentity = EthCrypto.createIdentity();
+    const freelancerIdentity = EthCrypto.createIdentity();
+    const keys = await createConversationKey(clientIdentity.publicKey, freelancerIdentity.publicKey);
+
+    await prisma.conversationKeyRegistry.upsert({
       where: { jobAddress },
       create: {
         jobAddress,
-        clientAddress: client,
-        freelancerAddress: freelancer,
-        encryptedKeyForClient: "ENC_KEY_CLIENT",
-        encryptedKeyForFreelancer: "ENC_KEY_FREELANCER",
+        clientAddress: clientWallet.address.toLowerCase(),
+        freelancerAddress: freelancerWallet.address.toLowerCase(),
+        encryptedKeyForClient: keys.encryptedKeyForClient,
+        encryptedKeyForFreelancer: keys.encryptedKeyForFreelancer,
         deletionEligible: false,
         keyShredded: false,
       },
-      update: {},
+      update: {
+        clientAddress: clientWallet.address.toLowerCase(),
+        freelancerAddress: freelancerWallet.address.toLowerCase(),
+      },
     });
 
-    const isClientParty = [registry.clientAddress.toLowerCase(), registry.freelancerAddress.toLowerCase()]
-      .includes(client.toLowerCase());
-    expect(isClientParty).toBe(true);
+    // Authenticate intruder socket
+    const authMessage = "Sign to connect to PolyLance Chat";
+    const intruderSig = await intruderWallet.signMessage(authMessage);
 
-    const isIntruderParty = [registry.clientAddress.toLowerCase(), registry.freelancerAddress.toLowerCase()]
-      .includes(intruder.toLowerCase());
-    expect(isIntruderParty).toBe(false);
+    const intruderSocket: ClientSocket = ioClient(SERVER_URL, {
+      auth: {
+        address: intruderWallet.address,
+        signature: intruderSig,
+        message: authMessage,
+      },
+      transports: ["websocket"],
+    });
+
+    await new Promise<void>((resolve) => {
+      intruderSocket.on("connect", () => resolve());
+    });
+
+    // 1. Attempt join-job-chat as intruder -> must return UNAUTHORIZED error
+    const joinRes = await new Promise<any>((resolve) => {
+      intruderSocket.emit("join-job-chat", { jobAddress }, (res: any) => resolve(res));
+    });
+    expect(joinRes.error).toContain("UNAUTHORIZED");
+
+    // 2. Attempt send-message-notify (CID injection) as intruder -> must return UNAUTHORIZED error
+    const injectRes = await new Promise<any>((resolve) => {
+      intruderSocket.emit("send-message-notify", { jobAddress, cid: "bafyfakecid123" }, (res: any) => resolve(res));
+    });
+    expect(injectRes.error).toContain("UNAUTHORIZED");
+
+    intruderSocket.disconnect();
   });
 });

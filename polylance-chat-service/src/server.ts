@@ -15,8 +15,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const server = http.createServer(app);
-const io = new Server(server, {
+export const server = http.createServer(app);
+export const io = new Server(server, {
   cors: {
     origin: process.env.FRONTEND_URL || "*",
     methods: ["GET", "POST"],
@@ -37,7 +37,7 @@ function isValidPublicKey(pubKey?: string): boolean {
   return clean.length === 130 && clean.startsWith("04");
 }
 
-async function getOrCreateKeyRegistry(
+export async function getOrCreateKeyRegistry(
   jobAddress: string,
   requesterAddress: string,
   clientPubKey?: string,
@@ -73,15 +73,12 @@ async function getOrCreateKeyRegistry(
     throw new Error("ROLE_VERIFICATION_FAILED: On-chain client or freelancer address not found");
   }
 
-  // BUG #2 FIX: Strictly require valid public keys — never generate silent fake keys!
-  const cPubKey = clientPubKey;
-  const fPubKey = freelancerPubKey || clientPubKey;
-
-  if (!isValidPublicKey(cPubKey) || !isValidPublicKey(fPubKey)) {
-    throw new Error("MISSING_PUBLIC_KEY: Valid wallet public keys required for ECIES conversation key exchange");
+  // BUG #2 FIX POLISH: Require both distinct public keys to be valid — NO DEFAULT FALLBACKS!
+  if (!isValidPublicKey(clientPubKey) || !isValidPublicKey(freelancerPubKey)) {
+    throw new Error("MISSING_PUBLIC_KEY: Valid public keys for both client and freelancer are required to initialize the conversation key registry");
   }
 
-  const keys = await createConversationKey(cPubKey!, fPubKey!);
+  const keys = await createConversationKey(clientPubKey!, freelancerPubKey!);
 
   return prisma.conversationKeyRegistry.create({
     data: {
@@ -113,17 +110,23 @@ io.on("connection", (socket) => {
   const walletAddress = socket.data.address;
 
   // Content-Blind Room Join
-  socket.on("join-job-chat", async (data: { jobAddress: string; pubKey?: string }, callback) => {
+  socket.on("join-job-chat", async (data: { jobAddress: string; clientPubKey?: string; freelancerPubKey?: string }, callback) => {
     const jobAddress = typeof data === "string" ? data : data?.jobAddress;
     if (!jobAddress) return callback?.({ error: "Missing jobAddress" });
 
     try {
-      const registry = await getOrCreateKeyRegistry(jobAddress, walletAddress, data?.pubKey);
+      const registry = await getOrCreateKeyRegistry(
+        jobAddress,
+        walletAddress,
+        data?.clientPubKey,
+        data?.freelancerPubKey
+      );
+
       if (!registry || registry.keyShredded) {
         return callback?.({ error: "Conversation unavailable or deleted", cids: [] });
       }
 
-      // BUG #1 FIX: Strict party validation — no mock party bypass!
+      // Strict party validation — no mock party bypass!
       const isClient = registry.clientAddress.toLowerCase() === walletAddress;
       const isFreelancer = registry.freelancerAddress.toLowerCase() === walletAddress;
 
@@ -153,7 +156,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // BUG #1 FIX: Content-Blind Message Relay with Strict Party Check & Injection Blocking
+  // Content-Blind Message Relay with Strict Party Check & Injection Blocking
   socket.on("send-message-notify", async (data: { jobAddress: string; cid: string }, callback) => {
     if (!data?.jobAddress || !data?.cid) {
       return callback?.({ error: "Missing required fields" });
