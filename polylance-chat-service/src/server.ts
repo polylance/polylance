@@ -30,6 +30,13 @@ const JobEscrowABI = [
   "function freelancer() external view returns (address)"
 ];
 
+function isValidPublicKey(pubKey?: string): boolean {
+  if (!pubKey) return false;
+  const clean = pubKey.startsWith("0x") ? pubKey.slice(2) : pubKey;
+  // Uncompressed public key format (starts with 04, 130 hex characters total)
+  return clean.length === 130 && clean.startsWith("04");
+}
+
 async function getOrCreateKeyRegistry(
   jobAddress: string,
   requesterAddress: string,
@@ -40,27 +47,41 @@ async function getOrCreateKeyRegistry(
   if (registry) return registry;
 
   const rpcUrl = process.env.RPC_URL || "http://127.0.0.1:8545";
-  let clientAddr = requesterAddress;
-  let freelancerAddr = requesterAddress;
+  let clientAddr: string | null = null;
+  let freelancerAddr: string | null = null;
 
   try {
     const provider = new ethers.JsonRpcProvider(rpcUrl);
     const jobContract = new ethers.Contract(jobAddress, JobEscrowABI, provider);
     const [c, f] = await Promise.all([
-      jobContract.client().catch(() => ethers.ZeroAddress),
-      jobContract.freelancer().catch(() => ethers.ZeroAddress),
+      jobContract.client(),
+      jobContract.freelancer(),
     ]);
-    if (c !== ethers.ZeroAddress) clientAddr = c;
-    if (f !== ethers.ZeroAddress) freelancerAddr = f;
+
+    if (c && c !== ethers.ZeroAddress) clientAddr = c.toLowerCase();
+    if (f && f !== ethers.ZeroAddress) freelancerAddr = f.toLowerCase();
   } catch (err) {
-    // fallback in test environment
+    if (process.env.NODE_ENV === "test") {
+      clientAddr = requesterAddress.toLowerCase();
+      freelancerAddr = requesterAddress.toLowerCase();
+    } else {
+      throw new Error("RPC_UNAVAILABLE: Could not verify on-chain client/freelancer roles for job contract");
+    }
   }
 
-  // Use provided public keys or default dummy pubkeys for testing
-  const cPubKey = clientPubKey || "04" + "a".repeat(128);
-  const fPubKey = freelancerPubKey || "04" + "b".repeat(128);
+  if (!clientAddr || !freelancerAddr) {
+    throw new Error("ROLE_VERIFICATION_FAILED: On-chain client or freelancer address not found");
+  }
 
-  const keys = await createConversationKey(cPubKey, fPubKey);
+  // BUG #2 FIX: Strictly require valid public keys — never generate silent fake keys!
+  const cPubKey = clientPubKey;
+  const fPubKey = freelancerPubKey || clientPubKey;
+
+  if (!isValidPublicKey(cPubKey) || !isValidPublicKey(fPubKey)) {
+    throw new Error("MISSING_PUBLIC_KEY: Valid wallet public keys required for ECIES conversation key exchange");
+  }
+
+  const keys = await createConversationKey(cPubKey!, fPubKey!);
 
   return prisma.conversationKeyRegistry.create({
     data: {
@@ -84,7 +105,7 @@ io.use(async (socket, next) => {
   if (!verified) {
     return next(new Error("Unauthorized: Invalid signature"));
   }
-  socket.data.address = address;
+  socket.data.address = address.toLowerCase();
   next();
 });
 
@@ -96,39 +117,43 @@ io.on("connection", (socket) => {
     const jobAddress = typeof data === "string" ? data : data?.jobAddress;
     if (!jobAddress) return callback?.({ error: "Missing jobAddress" });
 
-    const registry = await getOrCreateKeyRegistry(jobAddress, walletAddress, data?.pubKey);
-    if (!registry || registry.keyShredded) {
-      return callback?.({ error: "Conversation unavailable or deleted", cids: [] });
+    try {
+      const registry = await getOrCreateKeyRegistry(jobAddress, walletAddress, data?.pubKey);
+      if (!registry || registry.keyShredded) {
+        return callback?.({ error: "Conversation unavailable or deleted", cids: [] });
+      }
+
+      // BUG #1 FIX: Strict party validation — no mock party bypass!
+      const isClient = registry.clientAddress.toLowerCase() === walletAddress;
+      const isFreelancer = registry.freelancerAddress.toLowerCase() === walletAddress;
+
+      if (!isClient && !isFreelancer) {
+        return callback?.({ error: "UNAUTHORIZED: Not a party to this job chat" });
+      }
+
+      socket.join(jobAddress);
+
+      const encryptedKeyCopy = isClient
+        ? registry.encryptedKeyForClient
+        : registry.encryptedKeyForFreelancer;
+
+      const index = await prisma.messageIndex.findMany({
+        where: { jobAddress },
+        orderBy: { sentAt: "asc" },
+      });
+
+      callback?.({
+        encryptedKeyCopy,
+        deletionEligible: registry.deletionEligible,
+        keyShredded: registry.keyShredded,
+        cids: index.map((i) => i.messageCid),
+      });
+    } catch (err: any) {
+      callback?.({ error: err.message || "Failed to join job chat" });
     }
-
-    const isClient = registry.clientAddress.toLowerCase() === walletAddress.toLowerCase();
-    const isFreelancer = registry.freelancerAddress.toLowerCase() === walletAddress.toLowerCase();
-    const isMockParty = walletAddress !== ethers.ZeroAddress;
-
-    if (!isClient && !isFreelancer && !isMockParty) {
-      return callback?.({ error: "Not a party to this job" });
-    }
-
-    socket.join(jobAddress);
-
-    const encryptedKeyCopy = isClient
-      ? registry.encryptedKeyForClient
-      : registry.encryptedKeyForFreelancer;
-
-    const index = await prisma.messageIndex.findMany({
-      where: { jobAddress },
-      orderBy: { sentAt: "asc" },
-    });
-
-    callback?.({
-      encryptedKeyCopy,
-      deletionEligible: registry.deletionEligible,
-      keyShredded: registry.keyShredded,
-      cids: index.map((i) => i.messageCid),
-    });
   });
 
-  // Content-Blind Message Relay (Server receives ONLY the IPFS CID, never content)
+  // BUG #1 FIX: Content-Blind Message Relay with Strict Party Check & Injection Blocking
   socket.on("send-message-notify", async (data: { jobAddress: string; cid: string }, callback) => {
     if (!data?.jobAddress || !data?.cid) {
       return callback?.({ error: "Missing required fields" });
@@ -137,6 +162,14 @@ io.on("connection", (socket) => {
     const registry = await prisma.conversationKeyRegistry.findUnique({ where: { jobAddress: data.jobAddress } });
     if (!registry || registry.keyShredded) {
       return callback?.({ error: "Conversation unavailable or key shredded" });
+    }
+
+    // Strict access control check on message submission
+    const isClient = registry.clientAddress.toLowerCase() === walletAddress;
+    const isFreelancer = registry.freelancerAddress.toLowerCase() === walletAddress;
+
+    if (!isClient && !isFreelancer) {
+      return callback?.({ error: "UNAUTHORIZED: Only client or freelancer can post messages to this job chat" });
     }
 
     const indexItem = await prisma.messageIndex.create({
@@ -164,10 +197,11 @@ io.on("connection", (socket) => {
     const registry = await prisma.conversationKeyRegistry.findUnique({ where: { jobAddress } });
     if (!registry) return callback?.({ error: "Conversation registry not found" });
 
-    const isParty = [registry.clientAddress.toLowerCase(), registry.freelancerAddress.toLowerCase()]
-      .includes(walletAddress.toLowerCase());
-    if (!isParty && walletAddress === ethers.ZeroAddress) {
-      return callback?.({ error: "Not a party to this job" });
+    const isClient = registry.clientAddress.toLowerCase() === walletAddress;
+    const isFreelancer = registry.freelancerAddress.toLowerCase() === walletAddress;
+
+    if (!isClient && !isFreelancer) {
+      return callback?.({ error: "UNAUTHORIZED: Not a party to this job chat" });
     }
 
     if (!registry.deletionEligible) {
@@ -210,12 +244,14 @@ app.post("/api/unlock", async (req, res) => {
 });
 
 app.get("/health", (req, res) => {
-  res.json({ status: "healthy", service: "polylance-chat-service", mode: "crypto-shredding-ipfs" });
+  res.json({ status: "healthy", service: "polylance-chat-service", mode: "crypto-shredding-ipfs-hardened" });
 });
 
-startPaymentListener(prisma, io);
+if (process.env.NODE_ENV !== "test") {
+  startPaymentListener(prisma, io);
 
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`[CHAT SERVICE] PolyLance Crypto-Shredding Chat Server listening on http://localhost:${PORT}`);
-});
+  const PORT = process.env.PORT || 3001;
+  server.listen(PORT, () => {
+    console.log(`[CHAT SERVICE] PolyLance Hardened Escrow Chat Server listening on http://localhost:${PORT}`);
+  });
+}

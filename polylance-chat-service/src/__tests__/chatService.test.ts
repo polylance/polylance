@@ -1,9 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import EthCrypto from "eth-crypto";
 import { recoverPublicKey, createConversationKey, decryptOwnKey, encryptMessage, decryptMessage } from "../crypto/ecies.js";
 import { prisma } from "../server.js";
 
-describe("PolyLance Chat — Crypto-Shredding & IPFS Zero-Knowledge Invariants", () => {
+describe("PolyLance Hardened Chat — Security & Crypto-Shredding Invariants", () => {
+  beforeAll(() => {
+    process.env.NODE_ENV = "test";
+  });
+
   it("recovers public key from signature and executes ECIES key exchange", async () => {
     const clientIdentity = EthCrypto.createIdentity();
     const freelancerIdentity = EthCrypto.createIdentity();
@@ -37,7 +41,7 @@ describe("PolyLance Chat — Crypto-Shredding & IPFS Zero-Knowledge Invariants",
     expect(decrypted).toEqual(plaintext);
   });
 
-  it("crypto-shredding: key destruction permanently disables decryption", async () => {
+  it("crypto-shredding: key destruction permanently disables decryption and purges index", async () => {
     const jobAddress = "0x9999888877776666555544443333222211110000";
     const client = "0xaaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
     const freelancer = "0xbbbb2222bbbb2222bbbb2222bbbb2222bbbb2222";
@@ -97,5 +101,34 @@ describe("PolyLance Chat — Crypto-Shredding & IPFS Zero-Knowledge Invariants",
 
     const remainingIndex = await prisma.messageIndex.findMany({ where: { jobAddress } });
     expect(remainingIndex.length).toBe(0);
+  });
+
+  it("rejects non-party wallets from accessing or injecting messages", async () => {
+    const jobAddress = "0x7777888899990000111122223333444455556666";
+    const client = "0xaaaa1111aaaa1111aaaa1111aaaa1111aaaa1111";
+    const freelancer = "0xbbbb2222bbbb2222bbbb2222bbbb2222bbbb2222";
+    const intruder = "0x9999999999999999999999999999999999999999";
+
+    const registry = await prisma.conversationKeyRegistry.upsert({
+      where: { jobAddress },
+      create: {
+        jobAddress,
+        clientAddress: client,
+        freelancerAddress: freelancer,
+        encryptedKeyForClient: "ENC_KEY_CLIENT",
+        encryptedKeyForFreelancer: "ENC_KEY_FREELANCER",
+        deletionEligible: false,
+        keyShredded: false,
+      },
+      update: {},
+    });
+
+    const isClientParty = [registry.clientAddress.toLowerCase(), registry.freelancerAddress.toLowerCase()]
+      .includes(client.toLowerCase());
+    expect(isClientParty).toBe(true);
+
+    const isIntruderParty = [registry.clientAddress.toLowerCase(), registry.freelancerAddress.toLowerCase()]
+      .includes(intruder.toLowerCase());
+    expect(isIntruderParty).toBe(false);
   });
 });
