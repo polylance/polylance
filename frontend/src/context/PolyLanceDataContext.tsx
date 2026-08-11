@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { Job, UserProfile, DaoProposal, JobStatus, DisputeReason, Application, ProofOfWork, TreasuryProposal, TreasuryState } from '../types';
-import { generateDeterministicHash } from '../utils/formatters';
+import { Job, UserProfile, DaoProposal, JobStatus, DisputeReason, Application, ProofOfWork, TreasuryProposal, TreasuryState, JudgeRecord, JudgeMessage } from '../types';
+import { generateMockTxHash, generateDeterministicHash } from '../utils/formatters';
 import { generateIpfsCid } from '../utils/ipfs';
+import { fetchLiveExchangeRates } from '../utils/currency';
 import { CONTRACTS } from '../config/contracts';
 import { PAYMENT_TOKENS, getTokenBySymbol, getTokenByAddress } from '../config/paymentTokens';
 import JobFactoryABI from '../config/abis/JobFactory.json';
@@ -12,9 +13,32 @@ import JudgeDAOABI from '../config/abis/JudgeDAO.json';
 import { useWeb3 } from './Web3Context';
 
 const INITIAL_JOBS: Job[] = [];
-const INITIAL_PROPOSALS: DaoProposal[] = [];
+const INITIAL_PROPOSALS: DaoProposal[] = [
+  {
+    id: 'prop-101',
+    candidate: '0xB8aa0398B91A150B041DA819bc954Bb356e009Dd',
+    proposer: '0x25F6C8ed995C811E6c0ADb1D66A60830E8115e9A',
+    rationale: 'Nominate Lead Arbitrator for decentralized dispute resolution and circuit court quorum.',
+    status: 'Active',
+    votesFor: 14500,
+    votesAgainst: 3200,
+    createdAt: Date.now() - 86400000 * 3,
+  },
+  {
+    id: 'prop-102',
+    candidate: '0x62cdfc0692cc675c95304bace2c834d8f901dcba',
+    proposer: '0x9999888877776666555544443333222211110000',
+    rationale: 'Appoint Security Auditor as secondary Judge for technical code disputes.',
+    status: 'Active',
+    votesFor: 9800,
+    votesAgainst: 1400,
+    createdAt: Date.now() - 86400000 * 1,
+  }
+];
+const INITIAL_PROFILES: Record<string, UserProfile> = {};
 
 interface PolyLanceDataContextType {
+  loading: boolean;
   jobs: Job[];
   daoProposals: DaoProposal[];
   treasury: TreasuryState;
@@ -22,26 +46,33 @@ interface PolyLanceDataContextType {
   treasuryBalanceEth: number;
   treasuryHistory: { id: string; type: 'FEE_COLLECTED' | 'WITHDRAWAL'; amountUsdc: number; txHash: string; timestamp: number; by?: string }[];
   profiles: Record<string, UserProfile>;
+  judges: JudgeRecord[];
+  judgeMessages: Record<string, JudgeMessage[]>;
+  addJudge: (address: string, name: string, notes?: string, addedBy?: string) => void;
+  removeJudge: (address: string) => void;
+  toggleJudgeStatus: (address: string) => void;
+  sendJudgeChatMessage: (judgeAddress: string, text: string, senderRole: 'Admin' | 'Judge', senderAddress?: string) => void;
   postJob: (jobData: { title: string; description: string; category: any; amountUsdc: string; paymentTokenSymbol?: 'USDC' | 'MATIC'; reviewPeriodDays: number }, clientAddress: string) => Promise<Job>;
   applyToJob: (jobId: string, proposalText: string, applicantAddress: string, skills: string[], githubVerified: boolean, githubScore: number) => Promise<void>;
   selectFreelancer: (jobId: string, freelancerAddress: string) => Promise<void>;
   proposeTerms: (jobId: string, userAddress: string) => Promise<void>;
   fundJob: (jobId: string) => Promise<void>;
   submitWork: (jobId: string, title: string, description: string, evidenceHashes: string[], externalLink?: string) => Promise<void>;
-  postProgressUpdate: (jobId: string, progressPercent: number, statusNote: string, demoUrl?: string) => void;
-  requestTimeExtension: (jobId: string, requestedDays: number, reason: string) => void;
-  respondToTimeExtension: (jobId: string, requestId: string, approve: boolean, responseNote?: string) => void;
-  requestModifications: (jobId: string, note: string) => void;
+  postProgressUpdate: (jobId: string, progressPercent: number, statusNote: string, demoUrl?: string) => Promise<void>;
+  requestTimeExtension: (jobId: string, requestedDays: number, reason: string) => Promise<void>;
+  respondToTimeExtension: (jobId: string, requestId: string, approve: boolean, responseNote?: string) => Promise<void>;
+  requestModifications: (jobId: string, note: string) => Promise<void>;
   releasePayment: (jobId: string) => Promise<void>;
   claimAutoRelease: (jobId: string) => Promise<void>;
   raiseDispute: (jobId: string, reason: DisputeReason, evidenceText: string, evidenceIpfsHash: string, raisedByAddress: string) => Promise<void>;
   submitDisputeResponse: (jobId: string, responseText: string, responseIpfsHash: string) => void;
   resolveDispute: (jobId: string, freelancerBps: number, reasoningText: string, judgeAddress: string) => Promise<void>;
+  sendChatMessage: (jobId: string, text: string, senderRole: 'Client' | 'Freelancer' | 'Judge') => void;
   updateProfile: (profile: Partial<UserProfile>, address: string) => Promise<void>;
-  castDaoVote: (proposalId: number, support: boolean, voterAddress: string, votingPower?: number) => Promise<void>;
-  castVote: (proposalId: number, support: boolean, voterAddress: string) => Promise<void>;
+  castDaoVote: (proposalId: string | number, support: boolean, voterAddress?: string, votingPower?: number) => Promise<void> | void;
+  castVote: (proposalId: string | number, support: boolean, voterAddress?: string) => Promise<void> | void;
   createDaoProposal: (title: string, candidateAddress: string, description: string) => void;
-  proposeJudgeCandidate: (candidateAddress: string, description: string, proposerAddress: string) => void;
+  proposeJudgeCandidate: (candidateAddress: string, description: string, proposerAddress?: string) => void;
   withdrawTreasury: (to: string, amountUsdc: number, byAddress: string) => void;
   proposeTreasuryWithdrawal: (recipient: string, amountUsdc: string, purpose: string, proposerAddress: string) => void;
   signTreasuryWithdrawal: (proposalId: string, signerAddress: string) => void;
@@ -50,20 +81,241 @@ interface PolyLanceDataContextType {
 
 const PolyLanceDataContext = createContext<PolyLanceDataContextType | undefined>(undefined);
 
+const normalizeProfiles = (rawProfiles: Record<string, UserProfile>): Record<string, UserProfile> => {
+  const normalized: Record<string, UserProfile> = {};
+  const judgeAddr = (import.meta.env.VITE_JUDGE_ADDRESS || '0xB8aa0398B91A150B041DA819bc954Bb356e009Dd').toLowerCase();
+  const judgeGithub = import.meta.env.VITE_JUDGE_GITHUB_USERNAME || 'sunny200551';
+
+  for (const [addr, profile] of Object.entries(rawProfiles)) {
+    if (!addr) continue;
+    const lowerAddr = addr.toLowerCase();
+
+    // Copy profile data, but if this is NOT the judge address and it has the judge's GitHub username, unbind it
+    let cleanedProfile = { ...profile };
+    if (lowerAddr !== judgeAddr && cleanedProfile.githubUsername?.toLowerCase() === judgeGithub.toLowerCase()) {
+      delete cleanedProfile.githubUsername;
+      cleanedProfile.githubVerified = false;
+    }
+
+    const existing = normalized[lowerAddr];
+    if (!existing) {
+      normalized[lowerAddr] = { ...cleanedProfile, address: lowerAddr };
+    } else {
+      const selectNewer = (!existing.displayName && cleanedProfile.displayName) ||
+        (!existing.githubVerified && cleanedProfile.githubVerified) ||
+        (cleanedProfile.displayName && existing.displayName && cleanedProfile.displayName !== 'Anonymous PolyLancer' && existing.displayName === 'Anonymous PolyLancer');
+      if (selectNewer) {
+        normalized[lowerAddr] = { ...cleanedProfile, address: lowerAddr };
+      }
+    }
+  }
+
+  // Ensure judge profile is initialized and linked with the target GitHub username
+  if (!normalized[judgeAddr]) {
+    normalized[judgeAddr] = {
+      address: judgeAddr,
+      displayName: 'Protocol Judge',
+      bio: 'Official PolyLance Lead Arbitrator & DAO Verifier.',
+      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+      ipfsHash: 'QmJudgeProfileDataHashPlaceholder',
+      skills: ['Arbitration', 'Smart Contracts', 'Security Audit', 'Solidity'],
+      githubUsername: judgeGithub,
+      githubVerified: true,
+      primaryScore: 850,
+      reputationSbtCount: 12,
+    };
+  } else {
+    normalized[judgeAddr] = {
+      ...normalized[judgeAddr],
+      githubUsername: judgeGithub,
+      githubVerified: true,
+    };
+  }
+
+  return normalized;
+};
+
+
 export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { provider, getSigner } = useWeb3();
-  const [jobs, setJobs] = useState<Job[]>(INITIAL_JOBS);
-  const [daoProposals, setDaoProposals] = useState<DaoProposal[]>(INITIAL_PROPOSALS);
-  const [treasuryBalanceUsdc, setTreasuryBalanceUsdc] = useState<number>(0);
-  const [treasuryBalanceEth, setTreasuryBalanceEth] = useState<number>(0);
-  const [treasuryProposals, setTreasuryProposals] = useState<TreasuryProposal[]>([]);
-  const [treasuryHistory, setTreasuryHistory] = useState<any[]>([]);
-  const [profiles, setProfiles] = useState<Record<string, UserProfile>>({});
+  const hasUnsyncedChangesRef = useRef(false);
+  const isRestoringRef = useRef(false);
+  const lastLoadedCidRef = useRef<string | null>(null);
 
+  const touchLocalTimestamp = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('polylance_last_updated', Date.now().toString());
+    }
+  };
+
+  const [jobs, setJobsRaw] = useState<Job[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_jobs');
+      return saved ? JSON.parse(saved) : INITIAL_JOBS;
+    }
+    return INITIAL_JOBS;
+  });
+  const setJobs = (val: React.SetStateAction<Job[]>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setJobsRaw(val);
+  };
+
+  const [daoProposals, setDaoProposalsRaw] = useState<DaoProposal[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_dao_proposals');
+      return saved ? JSON.parse(saved) : INITIAL_PROPOSALS;
+    }
+    return INITIAL_PROPOSALS;
+  });
+  const setDaoProposals = (val: React.SetStateAction<DaoProposal[]>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setDaoProposalsRaw(val);
+  };
+
+  const [treasuryBalanceUsdc, setTreasuryBalanceUsdcRaw] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_treasury_balance_usdc');
+      if (saved === '10000' || !saved) return 0;
+      return parseFloat(saved);
+    }
+    return 0;
+  });
+  const setTreasuryBalanceUsdc = (val: React.SetStateAction<number>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setTreasuryBalanceUsdcRaw(val);
+  };
+
+  const [treasuryBalanceEth, setTreasuryBalanceEthRaw] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_treasury_balance_eth');
+      if (saved === '4.5' || !saved) return 0.0;
+      return parseFloat(saved);
+    }
+    return 0.0;
+  });
+  const setTreasuryBalanceEth = (val: React.SetStateAction<number>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setTreasuryBalanceEthRaw(val);
+  };
+
+  const [treasuryProposals, setTreasuryProposalsRaw] = useState<TreasuryProposal[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_treasury_proposals');
+      return saved ? JSON.parse(saved) : [];
+    }
+    return [];
+  });
+  const setTreasuryProposals = (val: React.SetStateAction<TreasuryProposal[]>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setTreasuryProposalsRaw(val);
+  };
+
+  const [treasuryHistory, setTreasuryHistoryRaw] = useState<any[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_treasury_history');
+      return saved ? JSON.parse(saved) : [];
+    }
+    return [];
+  });
+  const setTreasuryHistory = (val: React.SetStateAction<any[]>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setTreasuryHistoryRaw(val);
+  };
+
+  const [profiles, setProfilesRaw] = useState<Record<string, UserProfile>>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_profiles');
+      const raw = saved ? JSON.parse(saved) : INITIAL_PROFILES;
+      return normalizeProfiles(raw);
+    }
+    return INITIAL_PROFILES;
+  });
+  const setProfiles = (val: React.SetStateAction<Record<string, UserProfile>>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setProfilesRaw(val);
+  };
+
+  const [judges, setJudgesRaw] = useState<JudgeRecord[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_judges');
+      if (saved) return JSON.parse(saved);
+    }
+    const defaultJudgeAddr = (import.meta.env.VITE_JUDGE_ADDRESS || '0xB8aa0398B91A150B041DA819bc954Bb356e009Dd').toLowerCase();
+    return [
+      {
+        address: defaultJudgeAddr,
+        name: 'Primary Protocol Arbitrator',
+        status: 'Active',
+        addedAt: 1700000000000,
+        addedBy: 'Protocol Governance',
+        notes: 'Lead Arbitrator for decentralized dispute resolution.'
+      }
+    ];
+  });
+  const setJudges = (val: React.SetStateAction<JudgeRecord[]>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setJudgesRaw(val);
+  };
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('polylance_judges', JSON.stringify(judges));
+    }
+  }, [judges]);
+
+  const [judgeMessages, setJudgeMessagesRaw] = useState<Record<string, JudgeMessage[]>>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('polylance_judge_messages');
+      if (saved) return JSON.parse(saved);
+    }
+    return {};
+  });
+  const setJudgeMessages = (val: React.SetStateAction<Record<string, JudgeMessage[]>>) => {
+    if (!isRestoringRef.current) {
+      hasUnsyncedChangesRef.current = true;
+      touchLocalTimestamp();
+    }
+    setJudgeMessagesRaw(val);
+  };
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('polylance_judge_messages', JSON.stringify(judgeMessages));
+    }
+  }, [judgeMessages]);
+
+  const [loading, setLoading] = useState(true);
+  const pinataJwt = import.meta.env.VITE_PINATA_JWT;
+
+  const getAbi = (imported: any) => (Array.isArray(imported) ? imported : imported.abi ?? imported);
+
+  // 1. Sync on-chain jobs
   const syncOnChainJobs = useCallback(async () => {
     if (!provider) return;
     try {
-      const factory = new ethers.Contract(CONTRACTS.JobFactory, JobFactoryABI, provider);
+      const factory = new ethers.Contract(CONTRACTS.JobFactory, getAbi(JobFactoryABI), provider);
       if (!factory.filters || typeof factory.filters.JobPosted !== 'function') return;
       const filter = factory.filters.JobPosted();
       const logs = await factory.queryFilter(filter);
@@ -74,7 +326,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           const client = log.args[1] || log.args.client;
           const paymentToken = log.args[3] || log.args.paymentToken || ethers.ZeroAddress;
 
-          const escrow = new ethers.Contract(jobAddr, JobEscrowABI, provider);
+          const escrow = new ethers.Contract(jobAddr, getAbi(JobEscrowABI), provider);
           const [statusRaw, freelancer, amountRaw, reviewPeriod, submittedAt, termsHash] = await Promise.all([
             escrow.status().catch(() => 0n),
             escrow.freelancer().catch(() => ethers.ZeroAddress),
@@ -135,15 +387,260 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   useEffect(() => {
     syncOnChainJobs();
-    const interval = setInterval(syncOnChainJobs, 5000);
+    const interval = setInterval(syncOnChainJobs, 10000);
     return () => clearInterval(interval);
   }, [syncOnChainJobs]);
+
+  // 2. Background Pinata IPFS State Sync (Load)
+  useEffect(() => {
+    const loadStateFromPinata = async () => {
+      if (!pinataJwt) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const queryParams = encodeURIComponent('{"app":{"value":"polylance","op":"eq"},"type":{"value":"state","op":"eq"}}');
+        const listResponse = await fetch(`https://api.pinata.cloud/data/pinList?status=pinned&metadata[keyvalues]=${queryParams}`, {
+          headers: {
+            Authorization: `Bearer ${pinataJwt}`,
+          }
+        });
+        if (listResponse.ok) {
+          const listData = await listResponse.json();
+          const rows = listData.rows || [];
+          if (rows.length > 0) {
+            const newest = rows.sort((a: any, b: any) => new Date(b.date_pinned).getTime() - new Date(a.date_pinned).getTime())[0];
+            const cid = newest.ipfs_pin_hash;
+
+            const gateways = [
+              `https://ipfs.io/ipfs/${cid}`,
+              `https://gateway.pinata.cloud/ipfs/${cid}`,
+              `https://cloudflare-ipfs.com/ipfs/${cid}`,
+              `https://dweb.link/ipfs/${cid}`
+            ];
+
+            let data = null;
+            for (const gatewayUrl of gateways) {
+              try {
+                const getResponse = await fetch(gatewayUrl);
+                if (getResponse.ok) {
+                  data = await getResponse.json();
+                  console.log('Restored live cloud state from IPFS via:', gatewayUrl);
+                  break;
+                }
+              } catch (e) {
+                console.warn(`Gateway fetch failed for ${gatewayUrl}, trying next...`);
+              }
+            }
+
+            if (data) {
+              isRestoringRef.current = true;
+              if (data.jobs) setJobs(data.jobs);
+              if (data.daoProposals) setDaoProposals(data.daoProposals);
+              if (data.treasuryBalanceUsdc !== undefined) setTreasuryBalanceUsdc(data.treasuryBalanceUsdc);
+              if (data.treasuryBalanceEth !== undefined) setTreasuryBalanceEth(data.treasuryBalanceEth);
+              if (data.treasuryProposals) setTreasuryProposals(data.treasuryProposals);
+              if (data.treasuryHistory) setTreasuryHistory(data.treasuryHistory);
+              if (data.profiles) setProfiles(normalizeProfiles(data.profiles));
+
+              lastLoadedCidRef.current = cid;
+              isRestoringRef.current = false;
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Unable to load cloud state from Pinata, using local cache:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadStateFromPinata();
+  }, [pinataJwt]);
+
+  // 3. Background Polling Loop for Pinata updates
+  useEffect(() => {
+    if (!pinataJwt) return;
+
+    const pollInterval = setInterval(async () => {
+      // Always poll for fresh treasury proposals from other admins
+      // but skip all other state refresh if we have local pending changes
+      try {
+        const queryParams = encodeURIComponent('{"app":{"value":"polylance","op":"eq"},"type":{"value":"state","op":"eq"}}');
+        const listResponse = await fetch(`https://api.pinata.cloud/data/pinList?status=pinned&metadata[keyvalues]=${queryParams}`, {
+          headers: {
+            Authorization: `Bearer ${pinataJwt}`,
+          }
+        });
+        if (listResponse.ok) {
+          const listData = await listResponse.json();
+          const rows = listData.rows || [];
+          if (rows.length > 0) {
+            const newest = rows.sort((a: any, b: any) => new Date(b.date_pinned).getTime() - new Date(a.date_pinned).getTime())[0];
+            const cid = newest.ipfs_pin_hash;
+
+            if (cid === lastLoadedCidRef.current) return;
+
+            const response = await fetch(`https://gateway.pinata.cloud/ipfs/${cid}`);
+            if (response.ok) {
+              const data = await response.json();
+              if (data) {
+                isRestoringRef.current = true;
+                if (!hasUnsyncedChangesRef.current) {
+                  // Full state restore only when no local changes pending
+                  if (data.jobs) setJobs(data.jobs);
+                  if (data.daoProposals) setDaoProposals(data.daoProposals);
+                  if (data.treasuryBalanceUsdc !== undefined) setTreasuryBalanceUsdc(data.treasuryBalanceUsdc);
+                  if (data.treasuryBalanceEth !== undefined) setTreasuryBalanceEth(data.treasuryBalanceEth);
+                  if (data.treasuryHistory) setTreasuryHistory(data.treasuryHistory);
+                  if (data.profiles) setProfiles(normalizeProfiles(data.profiles));
+                }
+                // ALWAYS merge treasury proposals from cloud so cross-admin signing works
+                if (data.treasuryProposals && data.treasuryProposals.length > 0) {
+                  setTreasuryProposals((local: TreasuryProposal[]) => {
+                    const cloudProposals = data.treasuryProposals as TreasuryProposal[];
+                    const cloudMap = new Map<string, TreasuryProposal>(cloudProposals.map((p) => [p.id, p]));
+                    const merged: TreasuryProposal[] = local.map((lp) => {
+                      const cp = cloudMap.get(lp.id);
+                      if (!cp) return lp;
+                      const sigs = Array.from(new Set([...lp.signatures, ...cp.signatures]));
+                      return { ...lp, signatures: sigs, executed: lp.executed || cp.executed } as TreasuryProposal;
+                    });
+                    cloudProposals.forEach((cp) => {
+                      if (!merged.find((p) => p.id === cp.id)) merged.push(cp);
+                    });
+                    return merged;
+                  });
+                }
+                isRestoringRef.current = false;
+                lastLoadedCidRef.current = cid;
+                console.log('Background updated state to latest cloud CID:', cid);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Background state poll failed:', error);
+      }
+    }, 15000);
+
+    return () => clearInterval(pollInterval);
+  }, [pinataJwt]);
+
+  useEffect(() => {
+    fetchLiveExchangeRates().catch((err) => console.warn('Failed to load rates on boot:', err));
+  }, []);
+
+  // 4. Pinata Save Sync Loop
+  useEffect(() => {
+    if (loading || !pinataJwt) return;
+
+    const syncStateToPinata = async () => {
+      try {
+        const statePayload = {
+          jobs,
+          daoProposals,
+          treasuryBalanceUsdc,
+          treasuryBalanceEth,
+          treasuryProposals,
+          treasuryHistory,
+          profiles
+        };
+        const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${pinataJwt}`,
+          },
+          body: JSON.stringify({
+            pinataOptions: { cidVersion: 1 },
+            pinataMetadata: {
+              name: 'polylance_db_state',
+              keyvalues: { app: 'polylance', type: 'state' }
+            },
+            pinataContent: statePayload
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const newCid = data.IpfsHash;
+          console.log('Synced live cloud state to Pinata IPFS CID:', newCid);
+
+          lastLoadedCidRef.current = newCid;
+          hasUnsyncedChangesRef.current = false;
+
+          try {
+            const queryParams = encodeURIComponent('{"app":{"value":"polylance","op":"eq"},"type":{"value":"state","op":"eq"}}');
+            const listResponse = await fetch(`https://api.pinata.cloud/data/pinList?status=pinned&metadata[keyvalues]=${queryParams}`, {
+              headers: {
+                Authorization: `Bearer ${pinataJwt}`,
+              }
+            });
+            if (listResponse.ok) {
+              const listData = await listResponse.json();
+              const rows = listData.rows || [];
+              const oldPins = rows.filter((r: any) => r.ipfs_pin_hash !== newCid);
+              if (oldPins.length > 2) {
+                const oldest = oldPins.sort((a: any, b: any) => new Date(a.date_pinned).getTime() - new Date(b.date_pinned).getTime())[0];
+                fetch(`https://api.pinata.cloud/pinning/unpin/${oldest.ipfs_pin_hash}`, {
+                  method: 'DELETE',
+                  headers: {
+                    Authorization: `Bearer ${pinataJwt}`,
+                  }
+                }).catch(() => { });
+              }
+            }
+          } catch (pinListErr) {
+            // Silently catch client-side CORS restriction on Pinata management endpoint
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to sync state to Pinata in background:', error);
+      }
+    };
+
+    const timer = setTimeout(syncStateToPinata, 3000);
+    return () => clearTimeout(timer);
+  }, [jobs, daoProposals, treasuryBalanceUsdc, treasuryBalanceEth, treasuryProposals, treasuryHistory, profiles, loading, pinataJwt]);
+
+  // Local Cache storage triggers
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('polylance_jobs', JSON.stringify(jobs));
+  }, [jobs]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('polylance_dao_proposals', JSON.stringify(daoProposals));
+  }, [daoProposals]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('polylance_treasury_balance_usdc', treasuryBalanceUsdc.toString());
+  }, [treasuryBalanceUsdc]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('polylance_treasury_balance_eth', treasuryBalanceEth.toString());
+  }, [treasuryBalanceEth]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('polylance_treasury_proposals', JSON.stringify(treasuryProposals));
+  }, [treasuryProposals]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('polylance_treasury_history', JSON.stringify(treasuryHistory));
+  }, [treasuryHistory]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('polylance_profiles', JSON.stringify(profiles));
+  }, [profiles]);
 
   const treasuryState: TreasuryState = {
     balanceUsdc: treasuryBalanceUsdc.toString(),
     balanceEth: treasuryBalanceEth.toString(),
-    requiredSignatures: 1,
-    signers: ['0x25F6111122223333444455556666777788880e9A', '0x62cD88889999000011112222333344445555dCba'],
+    requiredSignatures: 2,
+    signers: [
+      import.meta.env.VITE_ADMIN_ADDRESS_1 || '0x62cDfc0692cC675c95304BaCE2C834D8F901dCba',
+      import.meta.env.VITE_ADMIN_ADDRESS_2 || '0x25F6C8ed995C811E6c0ADb1D66A60830E8115e9A',
+      import.meta.env.VITE_ADMIN_ADDRESS_3 || '0xb30F2eFBCEBC529d946e05C9ccE0f1ffFB7e1aB1',
+    ],
     proposals: treasuryProposals,
   };
 
@@ -160,7 +657,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer) {
-        const factory = new ethers.Contract(CONTRACTS.JobFactory, JobFactoryABI, signer);
+        const factory = new ethers.Contract(CONTRACTS.JobFactory, getAbi(JobFactoryABI), signer);
         const tx = await factory.postJob(descriptionIpfsHash, tokenConfig.address);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -176,7 +673,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!contractAddr) {
       const nonceVal = Math.floor(performance.now() * 1000) + jobs.length + 1;
       contractAddr = ethers.getCreateAddress({ from: clientAddress || ethers.ZeroAddress, nonce: nonceVal });
-      txHash = generateDeterministicHash(`${clientAddress}-${nonceVal}`);
+      txHash = generateMockTxHash();
     }
 
     const ethAmount = tokenConfig.symbol === 'MATIC'
@@ -253,7 +750,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.selectFreelancer(freelancerAddress);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -262,7 +759,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Real contract selectFreelancer fallback:', err);
     }
     if (!txHash) {
-      txHash = generateDeterministicHash(`select-${jobId}-${freelancerAddress}`);
+      txHash = generateMockTxHash();
     }
 
     setJobs((prev) =>
@@ -290,7 +787,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.proposeTerms();
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -309,7 +806,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
         let updatedEvents = j.events;
         if (bothAgreed) {
-          const finalTxHash = txHash || generateDeterministicHash(`terms-${jobId}`);
+          const finalTxHash = txHash || generateMockTxHash();
           updatedEvents = j.events.map((evt) => {
             if (evt.step === 'Terms') return { ...evt, status: 'completed' as const, timestamp: Date.now(), txHash: finalTxHash };
             if (evt.step === 'Funded') return { ...evt, status: 'current' as const };
@@ -321,7 +818,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           ...j,
           clientAgreedTerms: clientAgreed,
           freelancerAgreedTerms: freelancerAgreed,
-          termsHash: bothAgreed ? (txHash || generateDeterministicHash(`terms-${jobId}`)) : j.termsHash,
+          termsHash: bothAgreed ? (txHash || generateMockTxHash()) : j.termsHash,
           events: updatedEvents,
         };
       })
@@ -334,7 +831,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tokenConfig = getTokenByAddress(job.paymentToken);
 
         if (job.paymentToken === ethers.ZeroAddress || tokenConfig.symbol === 'MATIC') {
@@ -362,7 +859,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Real contract fundJob fallback:', err);
     }
     if (!txHash) {
-      txHash = generateDeterministicHash(`fund-${jobId}`);
+      txHash = generateMockTxHash();
     }
 
     setJobs((prev) =>
@@ -393,7 +890,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.submitWork(evidenceHashes);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -402,7 +899,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Real contract submitWork fallback:', err);
     }
     if (!txHash) {
-      txHash = generateDeterministicHash(`submit-${jobId}`);
+      txHash = generateMockTxHash();
     }
 
     const proofObj: ProofOfWork = {
@@ -445,7 +942,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.postProgressUpdate(updateIpfsHash);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -453,7 +950,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch (err) {
       console.warn('Real contract postProgressUpdate fallback:', err);
     }
-    if (!txHash) txHash = generateDeterministicHash(`update-${jobId}-${Date.now()}`);
+    if (!txHash) txHash = generateMockTxHash();
 
     const updateObj = {
       id: txHash.slice(0, 10),
@@ -497,7 +994,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.requestTimeExtension(requestedDays, reasonIpfsHash);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -505,7 +1002,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch (err) {
       console.warn('Real contract requestTimeExtension fallback:', err);
     }
-    if (!txHash) txHash = generateDeterministicHash(`ext-${jobId}-${Date.now()}`);
+    if (!txHash) txHash = generateMockTxHash();
 
     const requestIndex = job?.extensionRequests ? job.extensionRequests.length : 0;
     const reqObj = {
@@ -552,13 +1049,13 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
   ) => {
     let txHash = '';
     const job = jobs.find((j) => j.id === jobId);
-    const targetReq = job?.extensionRequests?.find((r) => r.id === requestId || r.requestIndex.toString() === requestId);
+    const targetReq = job?.extensionRequests?.find((r) => r.id === requestId || r.requestIndex?.toString() === requestId);
     const requestIndex = targetReq ? targetReq.requestIndex : 0;
 
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.respondToTimeExtension(requestIndex, approve);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -566,7 +1063,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch (err) {
       console.warn('Real contract respondToTimeExtension fallback:', err);
     }
-    if (!txHash) txHash = generateDeterministicHash(`ext-resp-${jobId}-${requestId}`);
+    if (!txHash) txHash = generateMockTxHash();
 
     setJobs((prev) =>
       prev.map((j) => {
@@ -617,7 +1114,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.requestModifications(noteIpfsHash);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -625,7 +1122,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch (err) {
       console.warn('Real contract requestModifications fallback:', err);
     }
-    if (!txHash) txHash = generateDeterministicHash(`mod-${jobId}-${Date.now()}`);
+    if (!txHash) txHash = generateMockTxHash();
 
     const modObj = {
       id: txHash.slice(0, 10),
@@ -635,10 +1132,10 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     };
 
     setJobs((prev) =>
-      prev.map((job) => {
-        if (job.id !== jobId) return job;
+      prev.map((j) => {
+        if (j.id !== jobId) return j;
         const newEvents = [
-          ...job.events,
+          ...j.events,
           {
             step: 'Modifications',
             title: 'Modifications Requested by Client',
@@ -650,8 +1147,8 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           },
         ];
         return {
-          ...job,
-          modificationRequests: [modObj, ...(job.modificationRequests || [])],
+          ...j,
+          modificationRequests: [modObj, ...(j.modificationRequests || [])],
           events: newEvents,
         };
       })
@@ -666,7 +1163,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.releasePayment();
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -675,8 +1172,8 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Real contract releasePayment fallback:', err);
     }
 
-    if (!txHash) txHash = generateDeterministicHash(`release-${jobId}`);
-    if (!sbtTxHash) sbtTxHash = generateDeterministicHash(`sbt-${jobId}`);
+    if (!txHash) txHash = generateMockTxHash();
+    if (!sbtTxHash) sbtTxHash = generateMockTxHash();
 
     setJobs((prev) =>
       prev.map((j) => {
@@ -687,6 +1184,22 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           { id: Date.now().toString(), type: 'FEE_COLLECTED', amountUsdc: fee, txHash, timestamp: Date.now() },
           ...h,
         ]);
+
+        if (j.freelancer) {
+          const flAddr = j.freelancer.toLowerCase();
+          setProfiles((prevProfiles) => {
+            const next = { ...prevProfiles };
+            const key = Object.keys(next).find(k => k.toLowerCase() === flAddr);
+            if (key) {
+              next[key] = {
+                ...next[key],
+                reputationSbtCount: (next[key].reputationSbtCount || 0) + 1,
+                primaryScore: Math.min((next[key].primaryScore || 700) + 35, 1000),
+              };
+            }
+            return next;
+          });
+        }
 
         const updatedEvents = j.events.map((evt) => {
           if (evt.step === 'Completed') return { ...evt, title: 'Payment Released (100%)', status: 'completed' as const, timestamp: Date.now(), txHash, actor: 'Client' };
@@ -720,7 +1233,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const tx = await escrow.raiseDispute(evidenceIpfsHash);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -728,7 +1241,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch (err) {
       console.warn('Real contract raiseDispute fallback:', err);
     }
-    if (!txHash) txHash = generateDeterministicHash(`dispute-${jobId}`);
+    if (!txHash) txHash = generateMockTxHash();
 
     setJobs((prev) =>
       prev.map((j) => {
@@ -758,12 +1271,12 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const submitDisputeResponse = (jobId: string, responseText: string, responseIpfsHash: string) => {
     setJobs((prev) =>
-      prev.map((job) => {
-        if (job.id !== jobId || !job.dispute) return job;
+      prev.map((j) => {
+        if (j.id !== jobId || !j.dispute) return j;
         return {
-          ...job,
+          ...j,
           dispute: {
-            ...job.dispute,
+            ...j.dispute,
             responseText,
             responseIpfsHash,
           },
@@ -780,7 +1293,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, JobEscrowABI, signer);
+        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
         const reasoningCid = generateIpfsCid(reasoningText);
         const tx = await escrow.resolveDispute(freelancerBps, reasoningCid);
         const receipt = await tx.wait();
@@ -790,8 +1303,8 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Real contract resolveDispute fallback:', err);
     }
 
-    if (!txHash) txHash = generateDeterministicHash(`resolve-${jobId}`);
-    if (!sbtTxHash) sbtTxHash = generateDeterministicHash(`resolve-sbt-${jobId}`);
+    if (!txHash) txHash = generateMockTxHash();
+    if (!sbtTxHash) sbtTxHash = generateMockTxHash();
     const reasoningCid = generateIpfsCid(reasoningText);
 
     setJobs((prev) =>
@@ -800,6 +1313,30 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         const freelancerPercent = freelancerBps / 100;
         const fee = parseFloat(j.amountUsdc) * 0.025;
         setTreasuryBalanceUsdc((b) => b + fee);
+        setTreasuryHistory((h) => [
+          { id: Date.now().toString(), type: 'FEE_COLLECTED', amountUsdc: fee, txHash, timestamp: Date.now() },
+          ...h,
+        ]);
+
+        if (j.freelancer) {
+          const flAddr = j.freelancer.toLowerCase();
+          setProfiles((prevProfiles) => {
+            const next = { ...prevProfiles };
+            const key = Object.keys(next).find(k => k.toLowerCase() === flAddr);
+            if (key) {
+              const reputationSbtCountInc = freelancerBps > 0 ? 1 : 0;
+              const scoreAdjustment = freelancerBps > 0
+                ? Math.round(35 * (freelancerBps / 10000))
+                : -20;
+              next[key] = {
+                ...next[key],
+                reputationSbtCount: (next[key].reputationSbtCount || 0) + reputationSbtCountInc,
+                primaryScore: Math.min(Math.max((next[key].primaryScore || 700) + scoreAdjustment, 0), 1000),
+              };
+            }
+            return next;
+          });
+        }
 
         const updatedEvents: any[] = [
           ...j.events.filter((e) => e.step !== 'Ruled' && e.step !== 'Minted'),
@@ -824,10 +1361,38 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
+  const sendChatMessage = (jobId: string, text: string, senderRole: 'Client' | 'Freelancer' | 'Judge') => {
+    setJobs((prev) =>
+      prev.map((job) => {
+        if (job.id !== jobId) return job;
+        const newMsg = { sender: senderRole, text, timestamp: Date.now() };
+        return {
+          ...job,
+          chatMessages: [...(job.chatMessages || []), newMsg],
+        };
+      })
+    );
+  };
+
   const updateProfile = async (profileData: Partial<UserProfile>, address: string) => {
     setProfiles((prev) => {
-      const existing = prev[address] || {
-        address,
+      const lowerAddress = address.toLowerCase();
+      if (profileData.githubVerified && profileData.githubUsername) {
+        const lowerUsername = profileData.githubUsername.toLowerCase().trim();
+        const duplicateAddress = Object.keys(prev).find(
+          (addr) =>
+            addr.toLowerCase() !== lowerAddress &&
+            prev[addr].githubVerified &&
+            prev[addr].githubUsername?.toLowerCase().trim() === lowerUsername
+        );
+        if (duplicateAddress) {
+          alert(`Verification Error: The GitHub account @${profileData.githubUsername} is already linked to another wallet address (${duplicateAddress.slice(0, 6)}...${duplicateAddress.slice(-4)})!\nOnly one wallet connection per GitHub username is allowed for Sybil resistance.`);
+          return prev;
+        }
+      }
+
+      const existing = prev[lowerAddress] || {
+        address: lowerAddress,
         displayName: 'Anonymous PolyLancer',
         bio: '',
         avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
@@ -836,9 +1401,10 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         githubVerified: false,
         reputationSbtCount: 0,
       };
+
       return {
         ...prev,
-        [address]: {
+        [lowerAddress]: {
           ...existing,
           ...profileData,
         },
@@ -846,12 +1412,12 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
-  const castDaoVote = async (proposalId: number, support: boolean, voterAddress: string, votingPower: number = 10) => {
+  const castDaoVote = async (proposalId: string | number, support: boolean, voterAddress?: string, votingPower: number = 10) => {
     let txHash = '';
     try {
       const signer = await getSigner();
-      if (signer) {
-        const judgeDao = new ethers.Contract(CONTRACTS.JudgeDAO, JudgeDAOABI, signer);
+      if (signer && typeof proposalId === 'number') {
+        const judgeDao = new ethers.Contract(CONTRACTS.JudgeDAO, getAbi(JudgeDAOABI), signer);
         const tx = await judgeDao.castVote(proposalId, support);
         const receipt = await tx.wait();
         txHash = receipt.hash;
@@ -862,7 +1428,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     setDaoProposals((prev) =>
       prev.map((prop) => {
-        if (prop.id !== proposalId) return prop;
+        if (String(prop.id) !== String(proposalId)) return prop;
         if (prop.userVoted) return prop;
         return {
           ...prop,
@@ -874,13 +1440,13 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
-  const castVote = async (proposalId: number, support: boolean, voterAddress: string) => {
-    await castDaoVote(proposalId, support, voterAddress, 10);
+  const castVote = async (proposalId: string | number, support: boolean, voterAddress?: string) => {
+    await castDaoVote(proposalId, support, voterAddress || '', 10);
   };
 
   const createDaoProposal = (title: string, candidateAddress: string, description: string) => {
     const newProp: DaoProposal = {
-      id: daoProposals.length + 1,
+      id: `prop-${Date.now()}`,
       title,
       candidateAddress,
       candidate: candidateAddress,
@@ -896,13 +1462,13 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     setDaoProposals((prev) => [newProp, ...prev]);
   };
 
-  const proposeJudgeCandidate = (candidateAddress: string, description: string, proposerAddress: string) => {
+  const proposeJudgeCandidate = (candidateAddress: string, description: string, proposerAddress?: string) => {
     const newProp: DaoProposal = {
-      id: daoProposals.length + 1,
+      id: `prop-${Date.now()}`,
       title: `Nominate ${candidateAddress.slice(0, 8)}... as Arbitrator`,
       candidateAddress,
       candidate: candidateAddress,
-      proposer: proposerAddress,
+      proposer: proposerAddress || '0x1111222233334444555566667777888899990000',
       description,
       rationale: description,
       votesFor: 10,
@@ -921,7 +1487,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         id: Date.now().toString(),
         type: 'WITHDRAWAL',
         amountUsdc,
-        txHash: generateDeterministicHash(`withdraw-${Date.now()}`),
+        txHash: generateMockTxHash(),
         timestamp: Date.now(),
         by: `${byAddress.slice(0, 6)}... (Safe Multisig)`,
       },
@@ -943,7 +1509,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       proposer: proposerAddress,
       signatures: [proposerAddress],
       confirmations: [proposerAddress],
-      confirmationsRequired: 1,
+      confirmationsRequired: 2,
       executed: false,
       isExecuted: false,
     };
@@ -954,7 +1520,8 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     setTreasuryProposals((prev) =>
       prev.map((p) => {
         if (p.id !== proposalId) return p;
-        if (p.signatures.includes(signerAddress)) return p;
+        // Case-insensitive duplicate check so different admin addresses work correctly
+        if (p.signatures.some((s) => s.toLowerCase() === signerAddress.toLowerCase())) return p;
         return {
           ...p,
           signatures: [...p.signatures, signerAddress],
@@ -977,9 +1544,64 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     );
   };
 
+  const addJudge = (address: string, name: string, notes?: string, addedBy?: string) => {
+    if (!address || !address.startsWith('0x')) return;
+    const lower = address.toLowerCase();
+    setJudges(prev => {
+      if (prev.some(j => j.address.toLowerCase() === lower)) return prev;
+      return [
+        ...prev,
+        {
+          address: lower,
+          name: name || `Judge ${lower.slice(0, 6)}...`,
+          status: 'Active',
+          addedAt: Date.now(),
+          addedBy: addedBy || 'Admin Governance',
+          notes: notes || 'Registered by platform administrator.'
+        }
+      ];
+    });
+  };
+
+  const removeJudge = (address: string) => {
+    const lower = address.toLowerCase();
+    setJudges(prev => prev.filter(j => j.address.toLowerCase() !== lower));
+  };
+
+  const toggleJudgeStatus = (address: string) => {
+    const lower = address.toLowerCase();
+    setJudges(prev => prev.map(j => {
+      if (j.address.toLowerCase() === lower) {
+        return { ...j, status: j.status === 'Active' ? 'Suspended' : 'Active' };
+      }
+      return j;
+    }));
+  };
+
+  const sendJudgeChatMessage = (judgeAddress: string, text: string, senderRole: 'Admin' | 'Judge', senderAddress?: string) => {
+    if (!judgeAddress || !text.trim()) return;
+    const lower = judgeAddress.toLowerCase();
+    const msg: JudgeMessage = {
+      id: `jmsg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      judgeAddress: lower,
+      sender: senderAddress || (senderRole === 'Admin' ? 'Admin' : lower),
+      senderRole,
+      text: text.trim(),
+      timestamp: Date.now()
+    };
+    setJudgeMessages(prev => {
+      const existing = prev[lower] || [];
+      return {
+        ...prev,
+        [lower]: [...existing, msg]
+      };
+    });
+  };
+
   return (
     <PolyLanceDataContext.Provider
       value={{
+        loading,
         jobs,
         daoProposals,
         treasury: treasuryState,
@@ -987,6 +1609,12 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         treasuryBalanceEth,
         treasuryHistory,
         profiles,
+        judges,
+        judgeMessages,
+        addJudge,
+        removeJudge,
+        toggleJudgeStatus,
+        sendJudgeChatMessage,
         postJob,
         applyToJob,
         selectFreelancer,
@@ -1002,6 +1630,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         raiseDispute,
         submitDisputeResponse,
         resolveDispute,
+        sendChatMessage,
         updateProfile,
         castDaoVote,
         castVote,
@@ -1013,6 +1642,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         executeTreasuryWithdrawal,
       }}
     >
+
       {children}
     </PolyLanceDataContext.Provider>
   );

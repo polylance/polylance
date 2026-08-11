@@ -1,230 +1,481 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { motion, AnimatePresence, useScroll, useTransform } from 'motion/react';
 import { useWeb3 } from '../context/Web3Context';
 import { PolyLanceLogo } from './PolyLanceLogo';
 import { LoginModal } from './LoginModal';
-import { Briefcase, PlusCircle, LayoutDashboard, Scale, Lock, BarChart3, User, Award, LogIn, Shield } from 'lucide-react';
+import {
+  Briefcase,
+  PlusCircle,
+  LayoutDashboard,
+  Scale,
+  BarChart3,
+  User,
+  Users,
+  LogIn,
+  Shield,
+  ChevronDown,
+  MessageSquare,
+  Menu,
+  X,
+  Landmark,
+  Trophy,
+  Settings,
+  Grid,
+  Power
+} from 'lucide-react';
 import { truncateAddress } from '../utils/formatters';
+import { dropdownVariants, transition, spring } from '../lib/motion';
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Nav Link with layoutId sliding pill
+// ──────────────────────────────────────────────────────────────────────────────
+interface NavLinkProps {
+  to: string;
+  active: boolean;
+  children: React.ReactNode;
+  accent?: 'purple' | 'amber';
+}
+
+const NavLink: React.FC<NavLinkProps> = ({ to, active, children, accent = 'purple' }) => {
+  const activeTextClass = accent === 'amber' ? 'text-amber-800 font-bold' : 'text-purple-700 font-bold';
+  const hoverClass = accent === 'amber'
+    ? 'hover:text-amber-700 hover:bg-amber-50/60'
+    : 'hover:text-slate-900 hover:bg-white/50';
+
+  return (
+    <Link
+      to={to}
+      className={`
+        relative px-3.5 py-1.5 rounded-full text-[13px] font-semibold
+        flex items-center gap-1.5 select-none z-10
+        transition-colors duration-200
+        nav-pill-item
+        ${active ? activeTextClass : `text-slate-600 ${hoverClass}`}
+      `}
+    >
+      {/* Sliding active background */}
+      {active && (
+        <motion.span
+          layoutId="activeNav"
+          className={`absolute inset-0 rounded-full ${
+            accent === 'amber'
+              ? 'bg-amber-100/80'
+              : 'bg-white/70'
+          }`}
+          style={{
+            boxShadow: accent === 'amber'
+              ? 'inset 0 1px 1px rgba(255,255,255,0.8), 0 1px 3px rgba(0,0,0,0.06)'
+              : 'inset 0 1px 1px rgba(255,255,255,0.8), 0 1px 3px rgba(37,99,235,0.08)',
+          }}
+          transition={spring.default}
+        />
+      )}
+      <span className="relative z-10 flex items-center gap-1.5">{children}</span>
+    </Link>
+  );
+};
+
+const DropdownLink: React.FC<{ to: string; icon: React.ReactNode; label: string; onClick: () => void }> = ({ to, icon, label, onClick }) => (
+  <Link
+    to={to}
+    onClick={onClick}
+    className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-semibold text-slate-700 hover:bg-purple-50/80 hover:text-purple-700 transition-all duration-150 group"
+  >
+    <span className="text-slate-400 group-hover:text-purple-500 transition-colors">{icon}</span>
+    {label}
+  </Link>
+);
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Main Navbar
+// ──────────────────────────────────────────────────────────────────────────────
 export const Navbar: React.FC = () => {
-  const { isConnected, address, currentRole, isArbitrator, isTreasuryAdmin, connectWallet, disconnectWallet } = useWeb3();
+  const { isConnected, address, currentRole, disconnectWallet } = useWeb3();
   const location = useLocation();
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
 
-  const isActive = (path: string) => location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
+  const moreRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setIsMoreOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    const handleScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Close mobile menu on route change
+  useEffect(() => { setIsMobileOpen(false); setIsMoreOpen(false); }, [location.pathname]);
+
+  const isActive = (path: string) =>
+    location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
   const isVisitor = !isConnected || currentRole === 'visitor';
 
   return (
     <>
-      <nav className="glass-panel sticky top-0 z-40 border-x-0 rounded-none border-t-0 bg-white/95 border-b border-slate-200 shadow-xs px-4 md:px-8 py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          {/* Brand Logo with 3D Hexagon P Icon */}
-          <Link to="/" className="flex items-center gap-3.5 group shrink-0">
-            <PolyLanceLogo size={40} className="group-hover:scale-105 transition-transform" />
-            <div className="flex items-center">
-              <span className="font-black text-2xl sm:text-3xl tracking-tight text-slate-900 font-heading">
-                Poly<span className="text-purple-700">Lance</span>
+      {/* ── Scroll-aware Liquid Glass Bar ─────────────────────────────────── */}
+      <motion.nav
+        animate={{
+          scale: scrolled ? 0.987 : 1,
+          boxShadow: scrolled
+            ? '0 12px 40px rgba(31,38,135,0.12), 0 2px 8px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.9)'
+            : '0 8px 32px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,0.9)',
+        }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className="mx-3 md:mx-auto my-3 max-w-7xl sticky top-3 z-40
+          flex items-center justify-between
+          px-4 py-2 rounded-[28px]"
+        style={{
+          background: 'linear-gradient(135deg, rgba(255,255,255,0.85) 0%, rgba(248,246,255,0.80) 100%)',
+          backdropFilter: 'blur(24px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+          border: '1px solid rgba(255,255,255,0.70)',
+        }}
+      >
+        {/* ── LEFT: Brand ─────────────────────────────────────────────── */}
+        <div className="flex items-center shrink-0">
+          <Link to="/" className="flex items-center gap-2.5 group shrink-0">
+            <div className="relative">
+              <div className="absolute inset-0 rounded-xl bg-purple-400/20 blur-md group-hover:bg-purple-400/30 transition-all duration-300" />
+              <PolyLanceLogo size={36} className="relative group-hover:scale-105 transition-transform duration-300 ease-out" />
+            </div>
+            <div className="flex flex-col leading-none">
+              <span className="font-black text-[22px] tracking-tight text-slate-900 leading-none">
+                Poly<span className="text-purple-600">Lance</span>
               </span>
-              <span className="ml-2.5 text-[10px] font-mono text-purple-900 font-extrabold bg-purple-100 px-2 py-0.5 rounded-md border border-purple-300 whitespace-nowrap inline-block shrink-0 shadow-2xs">
-                MVP ON-CHAIN
+              <span className="text-[7px] font-mono text-slate-400/60 font-medium tracking-[0.15em] uppercase mt-0.5 leading-none select-none">
+                mvp on-chain
               </span>
             </div>
           </Link>
+        </div>
 
-          {/* DYNAMIC ROLE-PERCEPTION NAVIGATION LINKS */}
-          <div className="hidden md:flex items-center gap-1.5 font-sans">
-            {/* 1. PUBLIC VISITOR PERCEPTION */}
-            {isVisitor ? (
-              <div className="flex items-center gap-2">
-                <Link
-                  to="/"
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/') && location.pathname === '/'
-                      ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                      : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                    }`}
-                >
-                  <Shield size={14} />
-                  Overview
-                </Link>
-
-                <Link
-                  to="/jobs"
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/jobs')
-                      ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                      : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                    }`}
-                >
-                  <Briefcase size={14} />
-                  Marketplace
-                </Link>
-
-                <Link
-                  to="/reputation"
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/reputation')
-                      ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                      : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                    }`}
-                >
-                  <Award size={14} />
-                  Leaderboard
-                </Link>
-              </div>
-            ) : (
+        {/* ── CENTER: Navigation Pill ──────────────────────────────────── */}
+        <div className="hidden md:flex items-center gap-0.5 font-sans">
+          <div
+            className="flex items-center gap-0.5 rounded-full px-1.5 py-1"
+            style={{
+              background: 'rgba(255,255,255,0.40)',
+              boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.05), 0 1px 0 rgba(255,255,255,0.8)',
+            }}
+          >
+            {/* VISITOR LINKS */}
+            {isVisitor && (
               <>
-                {/* 2. FREELANCER PERCEPTION */}
-                {currentRole === 'freelancer' && (
-                  <>
-                    <Link
-                      to="/jobs"
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/jobs') && !isActive('/jobs/post')
-                          ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                          : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                        }`}
-                    >
-                      <Briefcase size={14} />
-                      Find Jobs
-                    </Link>
+                <NavLink to="/" active={isActive('/') && location.pathname === '/'}>
+                  <Shield size={13} />Overview
+                </NavLink>
+                <NavLink to="/jobs" active={isActive('/jobs')}>
+                  <Briefcase size={13} />Find Jobs
+                </NavLink>
+                <NavLink to="/reputation" active={isActive('/reputation')}>
+                  <Trophy size={13} />SBT Leaderboard
+                </NavLink>
+                <NavLink to="/dao" active={isActive('/dao')}>
+                  <Users size={13} />DAO
+                </NavLink>
+              </>
+            )}
 
-                    <Link
-                      to="/reputation"
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/reputation')
-                          ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                          : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                        }`}
-                    >
-                      <Award size={14} />
-                      SBT Leaderboard
-                    </Link>
+            {/* CONNECTED ROLE LINKS */}
+            {!isVisitor && (
+              <>
+                <NavLink to="/dashboard" active={isActive('/dashboard')}>
+                  <LayoutDashboard size={13} />Dashboard
+                </NavLink>
+
+                {currentRole === 'client' && (
+                  <NavLink to="/jobs/post" active={isActive('/jobs/post')}>
+                    <PlusCircle size={13} />Post Job
+                  </NavLink>
+                )}
+
+                {/* For non-admin roles, show Find Jobs & SBT Leaderboard on top bar */}
+                {currentRole !== 'admin' && (
+                  <>
+                    <NavLink to="/jobs" active={isActive('/jobs') && !isActive('/jobs/post')}>
+                      <Briefcase size={13} />Find Jobs
+                    </NavLink>
+                    <NavLink to="/reputation" active={isActive('/reputation')}>
+                      <Trophy size={13} />SBT Leaderboard
+                    </NavLink>
                   </>
                 )}
 
-                {/* 3. CLIENT PERCEPTION */}
-                {currentRole === 'client' && (
-                  <Link
-                    to="/jobs/post"
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/jobs/post')
-                        ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                        : 'text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 font-bold'
-                      }`}
-                  >
-                    <PlusCircle size={14} />
-                    Post Job Escrow
-                  </Link>
+                {/* Judge Panel on top bar for Judge role */}
+                {currentRole === 'judge' && (
+                  <NavLink to="/judge" active={isActive('/judge')} accent="amber">
+                    <Scale size={13} />Judge Panel
+                  </NavLink>
                 )}
 
-                {/* 4. DASHBOARD (MY WORK / CLIENT ESCROWS) */}
-                {(currentRole === 'client' || currentRole === 'freelancer') && (
-                  <Link
-                    to="/dashboard"
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/dashboard')
-                        ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                        : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                      }`}
-                  >
-                    <LayoutDashboard size={14} />
-                    {currentRole === 'client' ? 'Client Escrows' : 'My Dashboard'}
-                  </Link>
+                {/* Treasury on top bar for Admin role */}
+                {currentRole === 'admin' && (
+                  <NavLink to="/treasury" active={isActive('/treasury')}>
+                    <Landmark size={13} />Treasury
+                  </NavLink>
                 )}
 
-                {/* 5. JUDGE PANEL (JUDGE PERCEPTION) */}
-                {(isArbitrator || currentRole === 'judge') && (
-                  <Link
-                    to="/judge"
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/judge')
-                        ? 'bg-amber-600 text-white font-extrabold shadow-sm'
-                        : 'text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 font-bold'
-                      }`}
-                  >
-                    <Scale size={14} />
-                    Judge Panel
-                  </Link>
-                )}
+                <NavLink to="/dao" active={isActive('/dao')}>
+                  <Users size={13} />DAO
+                </NavLink>
+                <NavLink to="/chat" active={isActive('/chat')}>
+                  <MessageSquare size={13} />Messages
+                </NavLink>
 
-                {/* 6. TREASURY ADMIN (ADMIN PERCEPTION) */}
-                {(isTreasuryAdmin || currentRole === 'admin') && (
-                  <Link
-                    to="/treasury"
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/treasury')
-                        ? 'bg-emerald-700 text-white font-extrabold shadow-sm'
-                        : 'text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 font-bold'
-                      }`}
+                {/* More dropdown */}
+                <div className="relative" ref={moreRef}>
+                  <button
+                    onClick={() => setIsMoreOpen(!isMoreOpen)}
+                    className={`
+                      px-3.5 py-1.5 rounded-full text-[13px] font-semibold
+                      flex items-center gap-1.5 cursor-pointer select-none
+                      nav-pill-item
+                      ${isMoreOpen ? 'text-purple-700 font-bold' : 'text-slate-600'}
+                    `}
+                    style={isMoreOpen ? {
+                      background: 'rgba(255,255,255,0.70)',
+                      boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.8), 0 1px 3px rgba(124,58,237,0.08)',
+                    } : {}}
                   >
-                    <Lock size={14} />
-                    Treasury Admin
-                  </Link>
-                )}
+                    <Grid size={13} />
+                    More
+                    <motion.span
+                      animate={{ rotate: isMoreOpen ? 180 : 0 }}
+                      transition={transition.fast}
+                    >
+                      <ChevronDown size={12} />
+                    </motion.span>
+                  </button>
 
-                {/* 7. DAO GOVERNANCE */}
-                <Link
-                  to="/dao"
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/dao')
-                      ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                      : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                    }`}
-                >
-                  <Award size={14} />
-                  DAO
-                </Link>
-
-                {/* 8. ANALYTICS */}
-                {currentRole !== 'judge' && (
-                  <Link
-                    to="/analytics"
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive('/analytics')
-                        ? 'bg-purple-700 text-white font-extrabold shadow-sm'
-                        : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100 font-semibold'
-                      }`}
-                  >
-                    <BarChart3 size={14} />
-                    Analytics
-                  </Link>
-                )}
+                  {/* Apple-glass dropdown */}
+                  <AnimatePresence>
+                    {isMoreOpen && (
+                      <motion.div
+                        variants={dropdownVariants}
+                        initial="initial"
+                        animate="animate"
+                        exit="exit"
+                        transition={transition.fast}
+                        className="absolute right-0 mt-2.5 w-52 rounded-2xl p-1.5 z-50"
+                        style={{
+                          background: 'rgba(255,255,255,0.92)',
+                          backdropFilter: 'blur(24px) saturate(180%)',
+                          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+                          border: '1px solid rgba(255,255,255,0.65)',
+                          boxShadow: '0 20px 60px rgba(0,0,0,0.12), 0 4px 16px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)',
+                        }}
+                      >
+                        {/* Admin specific extra options in More dropdown */}
+                        {currentRole === 'admin' && (
+                          <>
+                            <DropdownLink to="/jobs" icon={<Briefcase size={14} />} label="Find Jobs" onClick={() => setIsMoreOpen(false)} />
+                            <DropdownLink to="/reputation" icon={<Trophy size={14} />} label="SBT Leaderboard" onClick={() => setIsMoreOpen(false)} />
+                            <DropdownLink to="/judge" icon={<Scale size={14} />} label="Judge Panel" onClick={() => setIsMoreOpen(false)} />
+                            <div className="border-t border-slate-100/80 my-1" />
+                          </>
+                        )}
+                        <DropdownLink to={`/profile/${address}`} icon={<User size={14} />} label="Profile" onClick={() => setIsMoreOpen(false)} />
+                        <DropdownLink to={`/audit/${address}`} icon={<BarChart3 size={14} />} label="Audit Report" onClick={() => setIsMoreOpen(false)} />
+                        <DropdownLink to="/settings" icon={<Settings size={14} />} label="Settings" onClick={() => setIsMoreOpen(false)} />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </>
             )}
           </div>
-
-          {/* Right side Wallet / Perception Status */}
-          <div className="flex items-center gap-3 shrink-0">
-            {isConnected && address && currentRole !== 'visitor' ? (
-              <div className="flex items-center gap-2">
-                <Link
-                  to={`/profile/${address}`}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-50 border border-purple-200 text-purple-900 text-xs font-extrabold transition-all hover:bg-purple-100 shadow-2xs"
-                >
-                  <User size={14} className="text-purple-700" />
-                  <span>{truncateAddress(address)}</span>
-                </Link>
-                <button
-                  onClick={disconnectWallet}
-                  className="text-xs text-slate-500 hover:text-rose-600 transition-colors px-2 py-1 cursor-pointer font-medium"
-                >
-                  Disconnect
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={async () => {
-                    if (typeof window !== 'undefined' && (window as any).ethereum) {
-                      await connectWallet();
-                    } else {
-                      setIsLoginModalOpen(true);
-                    }
-                  }}
-                  className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  <LogIn size={14} />
-                  Connect Wallet
-                </button>
-              </div>
-            )}
-          </div>
         </div>
-      </nav>
 
-      {/* Login Options Modal */}
+        {/* ── RIGHT: Wallet + Mobile Toggle ──────────────────────────── */}
+        <div className="flex items-center gap-2 shrink-0">
+          {isConnected && address ? (
+            <div className="flex items-center gap-2">
+              <Link
+                to={`/profile/${address}`}
+                className="
+                  flex items-center gap-1.5 px-3.5 py-1.5 rounded-full
+                  text-[13px] font-semibold font-mono text-purple-700
+                  hover:bg-purple-100/80 transition-all duration-200
+                  apple-button
+                "
+                style={{
+                  background: 'rgba(246,240,255,0.85)',
+                  border: '1px solid rgba(167,139,250,0.30)',
+                  boxShadow: '0 1px 3px rgba(124,58,237,0.10), inset 0 1px 0 rgba(255,255,255,0.8)',
+                }}
+              >
+                <div className="w-4 h-4 rounded-full bg-purple-500 flex items-center justify-center shrink-0">
+                  <User size={10} className="text-white" />
+                </div>
+                <span>{truncateAddress(address)}</span>
+                <ChevronDown size={11} className="text-purple-400" />
+              </Link>
+
+              <motion.button
+                onClick={disconnectWallet}
+                title="Disconnect Wallet"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                className="
+                  w-8 h-8 rounded-full flex items-center justify-center
+                  text-slate-400 hover:text-rose-500
+                  cursor-pointer transition-colors duration-200
+                "
+                style={{
+                  background: 'rgba(255,255,255,0.75)',
+                  border: '1px solid rgba(255,255,255,0.65)',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.9)',
+                }}
+              >
+                <Power size={13} className="stroke-[2]" />
+              </motion.button>
+            </div>
+          ) : (
+            <Link
+              to="/login"
+              className="
+                px-4 py-1.5 rounded-full text-[13px] font-bold text-white
+                flex items-center gap-1.5 cursor-pointer
+                apple-button glass-highlight
+                bg-gradient-to-r from-purple-600 to-purple-500
+              "
+              style={{
+                boxShadow: '0 2px 8px rgba(124,58,237,0.30), inset 0 1px 0 rgba(255,255,255,0.15)',
+              }}
+            >
+              <LogIn size={13} />
+              Connect Wallet
+            </Link>
+          )}
+
+          {/* Mobile toggle */}
+          <motion.button
+            onClick={() => setIsMobileOpen(!isMobileOpen)}
+            whileTap={{ scale: 0.93 }}
+            className="
+              md:hidden p-2 rounded-full
+              text-slate-500 hover:text-purple-700
+              transition-colors duration-200 cursor-pointer
+            "
+            style={{
+              background: 'rgba(255,255,255,0.75)',
+              border: '1px solid rgba(255,255,255,0.65)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.9)',
+            }}
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              {isMobileOpen ? (
+                <motion.span key="close" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: 90, opacity: 0 }} transition={transition.micro}>
+                  <X size={15} />
+                </motion.span>
+              ) : (
+                <motion.span key="menu" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: -90, opacity: 0 }} transition={transition.micro}>
+                  <Menu size={15} />
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </motion.button>
+        </div>
+
+        {/* ── MOBILE DRAWER ─────────────────────────────────────────── */}
+        <AnimatePresence>
+          {isMobileOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0,  scale: 1    }}
+              exit={{    opacity: 0, y: -6, scale: 0.99  }}
+              transition={transition.medium}
+              className="absolute top-full left-0 right-0 mt-2 mx-1
+                rounded-3xl p-3 space-y-0.5 z-50 md:hidden"
+              style={{
+                background: 'rgba(255,255,255,0.95)',
+                backdropFilter: 'blur(24px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+                border: '1px solid rgba(255,255,255,0.70)',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.12), 0 4px 16px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)',
+              }}
+            >
+              {isVisitor ? (
+                <>
+                  <MobileLink to="/" icon={<Shield size={14} />} label="Overview" onClick={() => setIsMobileOpen(false)} />
+                  <MobileLink to="/jobs" icon={<Briefcase size={14} />} label="Find Jobs" onClick={() => setIsMobileOpen(false)} />
+                  <MobileLink to="/reputation" icon={<Trophy size={14} />} label="SBT Leaderboard" onClick={() => setIsMobileOpen(false)} />
+                  <MobileLink to="/dao" icon={<Users size={14} />} label="DAO" onClick={() => setIsMobileOpen(false)} />
+                  <div className="pt-2">
+                    <Link
+                      to="/login"
+                      onClick={() => setIsMobileOpen(false)}
+                      className="flex items-center justify-center gap-2 p-3 rounded-2xl text-[13px] font-bold text-white bg-gradient-to-r from-purple-600 to-purple-500 transition-all"
+                      style={{ boxShadow: '0 2px 8px rgba(124,58,237,0.25)' }}
+                    >
+                      <LogIn size={14} /> Connect Wallet
+                    </Link>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <MobileLink to="/dashboard" icon={<LayoutDashboard size={14} />} label="Dashboard" onClick={() => setIsMobileOpen(false)} />
+                  {currentRole === 'client' && (
+                    <MobileLink to="/jobs/post" icon={<PlusCircle size={14} />} label="Post Job" onClick={() => setIsMobileOpen(false)} />
+                  )}
+                  <MobileLink to="/jobs" icon={<Briefcase size={14} />} label="Find Jobs" onClick={() => setIsMobileOpen(false)} />
+                  <MobileLink to="/reputation" icon={<Trophy size={14} />} label="SBT Leaderboard" onClick={() => setIsMobileOpen(false)} />
+                  {(currentRole === 'admin' || currentRole === 'judge') && (
+                    <Link
+                      to="/judge"
+                      onClick={() => setIsMobileOpen(false)}
+                      className="flex items-center gap-2.5 p-2.5 rounded-xl text-[13px] font-semibold text-amber-800 bg-amber-50/80 transition-all"
+                    >
+                      <Scale size={14} className="text-amber-500" /> Judge Panel
+                    </Link>
+                  )}
+                  {currentRole === 'admin' && (
+                    <MobileLink to="/treasury" icon={<Landmark size={14} />} label="Treasury" onClick={() => setIsMobileOpen(false)} />
+                  )}
+                  <MobileLink to="/dao" icon={<Users size={14} />} label="DAO" onClick={() => setIsMobileOpen(false)} />
+                  <MobileLink to="/chat" icon={<MessageSquare size={14} />} label="Messages" onClick={() => setIsMobileOpen(false)} />
+                  <div className="border-t border-slate-100/80 pt-2 mt-1 space-y-0.5">
+                    <MobileLink to={`/profile/${address}`} icon={<User size={14} />} label="Profile" onClick={() => setIsMobileOpen(false)} />
+                    <MobileLink to={`/audit/${address}`} icon={<BarChart3 size={14} />} label="Audit Report" onClick={() => setIsMobileOpen(false)} />
+                    <MobileLink to="/settings" icon={<Settings size={14} />} label="Settings" onClick={() => setIsMobileOpen(false)} />
+                    <button
+                      onClick={() => { disconnectWallet(); setIsMobileOpen(false); }}
+                      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-[13px] font-semibold text-rose-600 hover:bg-rose-50 transition-all text-left"
+                    >
+                      <Power size={14} /> Disconnect
+                    </button>
+                  </div>
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.nav>
+
       <LoginModal isOpen={isLoginModalOpen} onClose={() => setIsLoginModalOpen(false)} />
     </>
   );
 };
+
+// Helper for mobile nav items
+const MobileLink: React.FC<{ to: string; icon: React.ReactNode; label: string; onClick: () => void }> = ({ to, icon, label, onClick }) => (
+  <Link
+    to={to}
+    onClick={onClick}
+    className="flex items-center gap-2.5 p-2.5 rounded-xl text-[13px] font-semibold text-slate-700 hover:bg-purple-50/80 hover:text-purple-700 transition-all"
+  >
+    <span className="text-slate-400">{icon}</span>
+    {label}
+  </Link>
+);

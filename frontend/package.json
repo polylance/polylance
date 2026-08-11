@@ -13,16 +13,21 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@rainbow-me/rainbowkit": "^2.2.11",
+    "@tanstack/react-query": "^5.101.4",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "ethers": "^6.13.5",
     "framer-motion": "^12.4.7",
     "lucide-react": "^0.475.0",
+    "motion": "^13.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.1.5",
     "socket.io-client": "^4.8.3",
-    "tailwind-merge": "^3.0.1"
+    "tailwind-merge": "^3.0.1",
+    "viem": "^2.55.11",
+    "wagmi": "^2.19.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",
@@ -41,5 +46,8 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vitest": "^3.0.5"
+  },
+  "overrides": {
+    "qr": "0.5.5"
   }
 }

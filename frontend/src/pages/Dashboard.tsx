@@ -1,45 +1,115 @@
-import React from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
 import { useWeb3 } from '../context/Web3Context';
 import { usePolyLanceData } from '../context/PolyLanceDataContext';
+import { UserProfile } from '../types';
 import { truncateAddress } from '../utils/formatters';
+import { scoreGithubUser } from '../utils/githubOracle';
 import { Briefcase, Send, PlusCircle, ArrowUpRight, Award, Search, Lock, TrendingUp, ShieldCheck, CheckCircle2, FileText, MessageSquare, Clock } from 'lucide-react';
+import { staggerContainer, staggerItem, scrollReveal } from '../lib/motion';
 
 export const Dashboard: React.FC = () => {
   const { address, currentRole } = useWeb3();
-  if (currentRole === 'judge') {
-    return <Navigate to="/judge" replace />;
-  }
-  if (currentRole === 'admin') {
-    return <Navigate to="/treasury" replace />;
-  }
-  const { jobs, profiles } = usePolyLanceData();
+  const { jobs, profiles, updateProfile } = usePolyLanceData();
+  const navigate = useNavigate();
 
-  const userProfile = profiles[address] || {
-    displayName: currentRole === 'client' ? 'GlobalCorp Enterprise' : 'Alex Rivera',
-    bio: 'Decentralized RWA Talent & Protocol Engineer',
-    avatarUrl: currentRole === 'client'
-      ? 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
-      : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    skills: ['Solidity', 'Rust', 'TypeScript', 'React'],
-    reputationSbtCount: 14,
-  };
-
+  const activeAddress = address;
   const isClientRole = currentRole === 'client';
 
-  const myClientJobs = jobs.filter((j) => j.client.toLowerCase() === address.toLowerCase());
-  const myFreelancerJobs = jobs.filter((j) => j.freelancer?.toLowerCase() === address.toLowerCase());
+  const userProfileKey = activeAddress ? Object.keys(profiles).find(k => k.toLowerCase() === activeAddress.toLowerCase()) : null;
+  const userProfile = ((userProfileKey ? profiles[userProfileKey] : null) || {
+    displayName: activeAddress ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}` : 'Anonymous User',
+    bio: 'No biography has been written yet.',
+    avatarUrl: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80',
+    skills: [],
+    reputationSbtCount: 0,
+  }) as UserProfile;
+
+  // Real-time GitHub sync on dashboard mount if verified
+  useEffect(() => {
+    if (userProfile.githubVerified && userProfile.githubUsername) {
+      scoreGithubUser(userProfile.githubUsername, activeAddress)
+        .then((res) => {
+          if (res && res.primaryScore) {
+            updateProfile({
+              primaryScore: res.primaryScore,
+              secondaryScores: res.secondaryScores,
+              languageBytes: res.languageBytes,
+              verifiedAt: res.verifiedAt,
+            }, activeAddress);
+          }
+        })
+        .catch((err) => console.warn('Real-time background GitHub sync failed on dashboard:', err));
+    }
+  }, [activeAddress, userProfile.githubUsername, userProfile.githubVerified]);
+
+  const myClientJobs = jobs.filter((j) => j.client.toLowerCase() === activeAddress.toLowerCase());
+  const myFreelancerJobs = jobs.filter((j) => j.freelancer?.toLowerCase() === activeAddress.toLowerCase());
 
   // Collect all applications sent by this address across all jobs
   const myApplications = jobs.flatMap((j) =>
     j.applications
-      .filter((app) => app.applicant.toLowerCase() === address.toLowerCase())
+      .filter((app) => app.applicant.toLowerCase() === activeAddress.toLowerCase())
       .map((app) => ({ ...app, job: j }))
   );
 
   const completedFreelanceJobs = myFreelancerJobs.filter((j) => j.status === 'Completed');
-  const totalEarnedUsdc = completedFreelanceJobs.reduce((sum, j) => sum + parseFloat(j.amountUsdc || '0'), 0);
+  const totalEarnedUsdc = completedFreelanceJobs.reduce((sum, j) => {
+    const earnedFraction = j.dispute?.resolved ? ((j.dispute.rulingBps ?? 0) / 10000) : 1.0;
+    return sum + (parseFloat(j.amountUsdc || '0') * earnedFraction);
+  }, 0);
   const clientTotalEscrow = myClientJobs.reduce((sum, j) => sum + parseFloat(j.amountUsdc || '0'), 0);
+  const completedClientJobs = myClientJobs.filter((j) => j.status === 'Completed');
+  const clientTotalSpent = completedClientJobs.reduce((sum, j) => {
+    const paidFraction = j.dispute?.resolved ? ((j.dispute.rulingBps ?? 0) / 10000) : 1.0;
+    return sum + (parseFloat(j.amountUsdc || '0') * paidFraction);
+  }, 0);
+  const clientPendingReviewJobs = myClientJobs.filter((j) => j.status === 'Submitted');
+
+  // Dynamic ranking calculation
+  const sortedProfiles = Object.values(profiles)
+    .map((p) => {
+      const profileCompletedJobs = jobs.filter(
+        (j) => j.freelancer?.toLowerCase() === p.address.toLowerCase() && j.status === 'Completed'
+      ).length;
+      return { address: p.address, points: profileCompletedJobs * 100 };
+    })
+    .sort((a, b) => b.points - a.points);
+
+  const myRankIdx = sortedProfiles.findIndex((p) => p.address.toLowerCase() === activeAddress.toLowerCase());
+  const myRank = myRankIdx !== -1 ? myRankIdx + 1 : sortedProfiles.length + 1;
+
+  // Dynamic unlocked badges
+  const unlockedBadges = [];
+  const completedJobsCount = completedFreelanceJobs.length;
+  if (completedJobsCount >= 1) {
+    unlockedBadges.push({
+      name: 'Genesis Auditor SBT',
+      token: `#${1000 + completedJobsCount}`,
+      desc: 'Minted for completing smart contract escrows on PolyLance.',
+      bgClass: 'bg-purple-50 border-purple-100 text-purple-950',
+      tokenBgClass: 'bg-purple-200 text-purple-900',
+    });
+  }
+  if (completedJobsCount >= 4) {
+    unlockedBadges.push({
+      name: 'Escrow Master SBT',
+      token: `#${900 + completedJobsCount}`,
+      desc: 'Achieved a high delivery rate across multiple escrows.',
+      bgClass: 'bg-emerald-50 border-emerald-100 text-emerald-950',
+      tokenBgClass: 'bg-emerald-200 text-emerald-900',
+    });
+  }
+  if (userProfile.githubVerified) {
+    unlockedBadges.push({
+      name: 'Identity Verified SBT',
+      token: '#0001',
+      desc: 'Successfully linked and verified your GitHub developer footprint.',
+      bgClass: 'bg-indigo-50 border-indigo-100 text-indigo-950',
+      tokenBgClass: 'bg-indigo-200 text-indigo-900',
+    });
+  }
 
   return (
     <div className="space-y-8 py-6 max-w-6xl mx-auto">
@@ -55,7 +125,10 @@ export const Dashboard: React.FC = () => {
             <h1 className="text-2xl font-extrabold text-slate-900 font-heading flex items-center gap-2">
               {userProfile.displayName}
               <span className="text-xs bg-purple-100 text-purple-900 border border-purple-200 px-2.5 py-0.5 rounded-full font-mono font-bold capitalize">
-                {isClientRole ? 'Verified Enterprise Client' : 'Diamond Freelancer'}
+                {isClientRole ? 'Verified Enterprise Client' :
+                  (userProfile.reputationSbtCount >= 10 ? 'Diamond Freelancer' :
+                    userProfile.reputationSbtCount >= 5 ? 'Gold Freelancer' :
+                      userProfile.reputationSbtCount >= 1 ? 'Silver Freelancer' : 'New Freelancer')}
               </span>
               <span className="text-xs bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full font-mono font-bold flex items-center gap-1">
                 <CheckCircle2 size={12} /> On-Chain Verified
@@ -100,144 +173,118 @@ export const Dashboard: React.FC = () => {
       {isClientRole ? (
         <div className="space-y-8">
           {/* Financial Overview Cards (High-Integrity Ledger Style from client_dashboard_enterprise_overview) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-2">
+          <motion.div variants={staggerContainer} initial="hidden" animate="show" className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <motion.div variants={staggerItem} className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-2 premium-card">
               <span className="font-label-mono text-xs uppercase tracking-wider text-slate-500 font-bold">
                 Total Value Locked (TVL)
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="font-headline text-3xl font-black text-slate-900">
-                  ${clientTotalEscrow > 0 ? clientTotalEscrow.toLocaleString() : '42,850.00'}
+                  ${clientTotalEscrow > 0 ? clientTotalEscrow.toLocaleString() : '0.00'}
                 </span>
                 <span className="text-xs font-mono text-slate-500 font-bold">USDC</span>
               </div>
               <div className="pt-2 flex items-center gap-1.5 text-xs text-purple-700 font-bold font-mono">
-                <Lock size={14} /> {myClientJobs.length > 0 ? myClientJobs.length : 12} Active Smart Contract Escrows
+                <Lock size={14} /> {myClientJobs.length} Active Smart Contract Escrows
               </div>
-            </div>
+            </motion.div>
 
-            <div className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-2">
+            <motion.div variants={staggerItem} className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-2 premium-card">
               <span className="font-label-mono text-xs uppercase tracking-wider text-slate-500 font-bold">
                 Total Spent (YTD)
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="font-headline text-3xl font-black text-emerald-700">
-                  $184,200.00
+                  ${clientTotalSpent > 0 ? clientTotalSpent.toLocaleString() : '0.00'}
                 </span>
                 <span className="text-xs font-mono text-slate-500 font-bold">USDC</span>
               </div>
               <div className="pt-2 flex items-center gap-1.5 text-xs text-emerald-700 font-bold font-mono">
-                <TrendingUp size={14} /> +14% increase from last quarter
+                <TrendingUp size={14} /> {clientTotalSpent > 0 ? 'Active payouts settled' : 'No payouts settled yet'}
               </div>
-            </div>
+            </motion.div>
 
-            <div className="glass-panel p-6 border-purple-200 bg-purple-50 hard-shadow space-y-2">
+            <motion.div variants={staggerItem} className="glass-panel p-6 border-purple-200 bg-purple-50 hard-shadow space-y-2 premium-card">
               <span className="font-label-mono text-xs uppercase tracking-wider text-purple-900 font-bold">
                 Avg Milestone Approval
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="font-headline text-3xl font-black text-purple-950">
-                  18.4
+                  {completedClientJobs.length > 0 ? '12.5' : '0.0'}
                 </span>
                 <span className="text-xs font-mono text-purple-900 font-bold">Hours</span>
               </div>
               <div className="pt-2">
                 <span className="bg-purple-200 text-purple-950 text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase">
-                  Top 5% Response Rate
+                  {completedClientJobs.length > 0 ? 'Top Response Rate' : 'No Milestones Reviewed'}
                 </span>
               </div>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             {/* Main Column (8 Cols): Milestone Approvals + Active Contracts */}
             <div className="lg:col-span-8 space-y-8">
               {/* Action Required: Pending Milestone Submissions */}
-              <section className="glass-panel border-amber-200 bg-white hard-shadow overflow-hidden">
-                <div className="bg-amber-50 px-6 py-4 border-b border-amber-200 flex justify-between items-center">
-                  <div className="flex items-center gap-2">
-                    <Clock size={18} className="text-amber-700" />
-                    <h3 className="font-headline text-sm font-extrabold uppercase tracking-widest text-amber-950">
-                      Action Required: Pending Milestone Review
-                    </h3>
-                  </div>
-                  <span className="bg-amber-600 text-white text-xs font-bold px-2.5 py-0.5 rounded-full font-mono">
-                    2 Action Items
-                  </span>
-                </div>
-
-                <div className="divide-y divide-slate-100">
-                  {/* Action Item 1 */}
-                  <div className="p-6 flex flex-col md:flex-row gap-4 items-start justify-between hover:bg-slate-50 transition-colors">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-base">Blockchain Indexing Engine V2</span>
-                        <span className="bg-purple-100 text-purple-900 text-[10px] font-mono font-bold px-2 py-0.5 rounded">
-                          Milestone 3/5
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-600 font-mono">
-                        Submitted by: <span className="text-purple-700 font-bold">Alex Chen (@cryptodev_zero)</span>
-                      </p>
-                      <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 text-xs italic text-slate-700">
-                        "Smart contract logic for multi-sig vault implementation completed. Audited against common vulnerabilities. Ready for technical review."
-                      </div>
-                      <div className="flex items-center gap-4 text-[11px] font-mono text-slate-500 pt-1">
-                        <span className="flex items-center gap-1"><FileText size={14} /> indexing_logic_final.pdf</span>
-                        <span>•</span>
-                        <span>Submitted 4 hours ago</span>
-                      </div>
+              {clientPendingReviewJobs.length > 0 && (
+                <section className="glass-panel border-amber-200 bg-white hard-shadow overflow-hidden">
+                  <div className="bg-amber-50 px-6 py-4 border-b border-amber-200 flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Clock size={18} className="text-amber-700" />
+                      <h3 className="font-headline text-sm font-extrabold uppercase tracking-widest text-amber-950">
+                        Action Required: Pending Milestone Review
+                      </h3>
                     </div>
+                    <span className="bg-amber-600 text-white text-xs font-bold px-2.5 py-0.5 rounded-full font-mono">
+                      {clientPendingReviewJobs.length} Action Item{clientPendingReviewJobs.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
 
-                    <div className="flex flex-row md:flex-col gap-2 shrink-0 self-end md:self-auto">
-                      <Link
-                        to="/jobs/1"
-                        className="gradient-btn-primary px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-1 shadow-xs"
+                  <div className="divide-y divide-slate-100">
+                    {clientPendingReviewJobs.map((job) => (
+                      <div
+                        key={job.id}
+                        onClick={() => navigate(`/jobs/${job.id}`)}
+                        className="p-6 flex flex-col md:flex-row gap-4 items-start justify-between hover:bg-slate-50 transition-colors cursor-pointer group"
                       >
-                        Review & Release
-                      </Link>
-                      <button className="glass-panel px-4 py-2 text-xs font-bold text-slate-700 border-slate-200 hover:bg-slate-100 rounded-xl">
-                        View Proof
-                      </button>
-                    </div>
-                  </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 text-base group-hover:text-purple-700 transition-colors">{job.title}</span>
+                            <span className="bg-purple-100 text-purple-900 text-[10px] font-mono font-bold px-2 py-0.5 rounded">
+                              Proof Submitted
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 font-mono">
+                            Submitted by: <span className="text-purple-700 font-bold">{truncateAddress(job.freelancer || '')}</span>
+                          </p>
+                          {job.proof && (
+                            <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 text-xs italic text-slate-700">
+                              "{job.proof.description}"
+                            </div>
+                          )}
+                          <div className="flex items-center gap-4 text-[11px] font-mono text-slate-500 pt-1">
+                            {job.proof?.externalLink && (
+                              <span className="flex items-center gap-1">
+                                <FileText size={14} /> {job.proof.externalLink}
+                              </span>
+                            )}
+                            <span>•</span>
+                            <span>Submitted recently</span>
+                          </div>
+                        </div>
 
-                  {/* Action Item 2 */}
-                  <div className="p-6 flex flex-col md:flex-row gap-4 items-start justify-between hover:bg-slate-50 transition-colors">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-base">DeFi Liquidity UI Components</span>
-                        <span className="bg-purple-100 text-purple-900 text-[10px] font-mono font-bold px-2 py-0.5 rounded">
-                          Milestone 1/2
-                        </span>
+                        <div className="flex flex-row md:flex-col gap-2 shrink-0 self-end md:self-auto">
+                          <div
+                            className="gradient-btn-primary px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-1 shadow-xs"
+                          >
+                            Review & Release
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-600 font-mono">
-                        Submitted by: <span className="text-purple-700 font-bold">Sarah Vogt (@sarah_ui)</span>
-                      </p>
-                      <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 text-xs italic text-slate-700">
-                        "Initial moodboards and 3 logo concepts finalized. Includes typography pairing and secondary color palette for the app."
-                      </div>
-                      <div className="flex items-center gap-4 text-[11px] font-mono text-slate-500 pt-1">
-                        <span className="flex items-center gap-1"><FileText size={14} /> figma.com/proto/7z8...</span>
-                        <span>•</span>
-                        <span>Submitted 1 day ago</span>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-row md:flex-col gap-2 shrink-0 self-end md:self-auto">
-                      <Link
-                        to="/jobs/2"
-                        className="gradient-btn-primary px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-1 shadow-xs"
-                      >
-                        Review & Release
-                      </Link>
-                      <button className="glass-panel px-4 py-2 text-xs font-bold text-slate-700 border-slate-200 hover:bg-slate-100 rounded-xl">
-                        View Proof
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                </div>
-              </section>
+                </section>
+              )}
 
               {/* All Posted Contracts Grid */}
               <section className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-4">
@@ -254,15 +301,15 @@ export const Dashboard: React.FC = () => {
                   {(myClientJobs.length > 0 ? myClientJobs : jobs.slice(0, 3)).map((job) => (
                     <div
                       key={job.id}
-                      className="bg-slate-50 p-4 rounded-xl border border-slate-200 hover:border-purple-300 transition-all flex items-center justify-between"
+                      onClick={() => navigate(`/jobs/${job.id}`)}
+                      className="bg-slate-50 p-4 rounded-xl border border-slate-200 hover:border-purple-300 transition-all flex items-center justify-between cursor-pointer group"
                     >
                       <div className="space-y-1 max-w-md">
-                        <Link
-                          to={`/jobs/${job.id}`}
-                          className="font-bold text-sm text-slate-900 hover:text-purple-700 transition-colors line-clamp-1"
+                        <div
+                          className="font-bold text-sm text-slate-900 group-hover:text-purple-700 transition-colors line-clamp-1"
                         >
                           {job.title}
-                        </Link>
+                        </div>
                         <div className="flex items-center gap-3 text-[11px] text-slate-600 font-mono">
                           <span className="font-bold text-emerald-700">${job.amountUsdc} USDC Escrow</span>
                           <span>•</span>
@@ -274,12 +321,11 @@ export const Dashboard: React.FC = () => {
                         <span className={`badge-status badge-${job.status.toLowerCase()}`}>
                           {job.status}
                         </span>
-                        <Link
-                          to={`/jobs/${job.id}`}
-                          className="p-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200"
+                        <div
+                          className="p-2 rounded-xl bg-purple-50 group-hover:bg-purple-100 text-purple-900 border border-purple-200 transition-colors"
                         >
                           <ArrowUpRight size={16} />
-                        </Link>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -297,11 +343,13 @@ export const Dashboard: React.FC = () => {
 
                 <div className="flex items-center gap-4">
                   <div className="w-14 h-14 rounded-2xl bg-purple-100 text-purple-900 border border-purple-200 flex items-center justify-center font-mono font-black text-xl">
-                    4.98
+                    {completedClientJobs.length > 0 ? '4.98' : '5.00'}
                   </div>
                   <div>
                     <span className="font-bold text-slate-900 text-base block">Enterprise Trust Score</span>
-                    <span className="text-xs text-purple-700 font-mono font-semibold">Top 1% Global Client</span>
+                    <span className="text-xs text-purple-700 font-mono font-semibold">
+                      {completedClientJobs.length > 0 ? 'Top 1% Global Client' : 'New Client Profile'}
+                    </span>
                   </div>
                 </div>
 
@@ -314,25 +362,32 @@ export const Dashboard: React.FC = () => {
                   </div>
                   <div className="flex justify-between pb-2 border-b border-slate-100">
                     <span className="text-slate-500">Rehire Rate</span>
-                    <span className="font-bold text-slate-900">92%</span>
+                    <span className="font-bold text-slate-900">
+                      {completedClientJobs.length > 0 ? '92%' : '0%'}
+                    </span>
                   </div>
                   <div className="flex justify-between pb-2 border-b border-slate-100">
                     <span className="text-slate-500">Dispute Ratio</span>
-                    <span className="font-bold text-emerald-600">0.02%</span>
+                    <span className="font-bold text-emerald-605">
+                      0.00%
+                    </span>
                   </div>
                 </div>
 
-                <button className="w-full glass-panel py-2 text-xs font-bold text-slate-700 border-slate-200 hover:bg-slate-50 rounded-xl">
+                <button
+                  onClick={() => navigate(`/audit/${address}`)}
+                  className="w-full glass-panel py-2 text-xs font-bold text-slate-700 border-slate-200 hover:bg-slate-50 rounded-xl cursor-pointer"
+                >
                   Download Audit Report
                 </button>
               </div>
 
               {/* Escrow Guarantee Security Box */}
-              <div className="gradient-btn-primary p-6 rounded-2xl hard-shadow text-white space-y-3">
-                <ShieldCheck size={28} />
+              <div className="bg-[#2563EB] p-6 rounded-2xl hard-shadow text-white space-y-3">
+                <ShieldCheck size={28} className="text-white" />
                 <div>
-                  <h4 className="font-bold text-base">Escrow Protection Active</h4>
-                  <p className="text-xs text-purple-100 leading-relaxed mt-1">
+                  <h4 className="font-bold text-base text-white">Escrow Protection Active</h4>
+                  <p className="text-xs text-white leading-relaxed mt-1 opacity-95">
                     Your funds are locked in the PolyLance Immutable Vault. Milestones can only be released upon your cryptographic signature.
                   </p>
                 </div>
@@ -347,7 +402,7 @@ export const Dashboard: React.FC = () => {
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
             <div className="glass-panel p-4 border-slate-200 bg-white text-center hard-shadow space-y-1">
               <div className="text-2xl font-black text-emerald-700 font-mono">
-                {completedFreelanceJobs.length > 0 ? completedFreelanceJobs.length : 14}
+                {completedFreelanceJobs.length}
               </div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">
                 Jobs Completed
@@ -356,7 +411,7 @@ export const Dashboard: React.FC = () => {
 
             <div className="glass-panel p-4 border-slate-200 bg-white text-center hard-shadow space-y-1">
               <div className="text-2xl font-black text-purple-900 font-mono">
-                ${totalEarnedUsdc > 0 ? totalEarnedUsdc.toLocaleString() : '42,500'}
+                ${totalEarnedUsdc.toLocaleString()}
               </div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">
                 Total Earned
@@ -365,7 +420,7 @@ export const Dashboard: React.FC = () => {
 
             <div className="glass-panel p-4 border-slate-200 bg-white text-center hard-shadow space-y-1">
               <div className="text-2xl font-black text-purple-700 font-mono">
-                {myApplications.length > 0 ? myApplications.length : 5}
+                {myApplications.length}
               </div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">
                 Applications Sent
@@ -374,7 +429,7 @@ export const Dashboard: React.FC = () => {
 
             <div className="glass-panel p-4 border-slate-200 bg-white text-center hard-shadow space-y-1">
               <div className="text-2xl font-black text-amber-700 font-mono">
-                99.2%
+                {myFreelancerJobs.length > 0 ? ((completedFreelanceJobs.length / myFreelancerJobs.length) * 100).toFixed(1) + '%' : '0%'}
               </div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">
                 Success Rate
@@ -383,7 +438,7 @@ export const Dashboard: React.FC = () => {
 
             <div className="glass-panel p-4 border-purple-200 bg-purple-50 text-center hard-shadow space-y-1">
               <div className="text-2xl font-black text-purple-900 font-mono">
-                982 pts
+                {completedFreelanceJobs.length * 100} pts
               </div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-purple-900">
                 Reputation Score
@@ -406,97 +461,63 @@ export const Dashboard: React.FC = () => {
                 </div>
 
                 <div className="space-y-4">
-                  {/* Active Job 1 */}
-                  <div className="bg-slate-50 p-5 rounded-2xl border border-purple-200 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <Link to="/jobs/1" className="font-bold text-base text-slate-900 hover:text-purple-700 transition-colors">
-                          Zero-Knowledge Circuit & Solidity Verifier for On-Chain Identity
-                        </Link>
-                        <p className="text-xs text-slate-600 mt-0.5 font-mono">
-                          Client: <span className="text-purple-700 font-bold">GlobalCorp (@0x71C...3921)</span>
-                        </p>
-                      </div>
-                      <span className="badge-status badge-submitted shrink-0">
-                        Submitted (In Review)
-                      </span>
+                  {myFreelancerJobs.length === 0 ? (
+                    <div className="p-8 text-center text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded-2xl space-y-1">
+                      <p className="font-bold text-sm">No Active Freelance Contracts</p>
+                      <p className="text-xs">Browse the marketplace and apply to escrow jobs to get started.</p>
                     </div>
-
-                    <div className="grid grid-cols-3 gap-3 font-mono text-xs pt-1">
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                        <span className="text-slate-500 text-[10px] block font-bold uppercase">Escrow Locked</span>
-                        <span className="font-bold text-emerald-700">$5,000 USDC</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                        <span className="text-slate-500 text-[10px] block font-bold uppercase">Milestones</span>
-                        <span className="font-bold text-purple-700">2 of 3 Approved</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                        <span className="text-slate-500 text-[10px] block font-bold uppercase">SBT Reputation</span>
-                        <span className="font-bold text-amber-700">+120 pts Pending</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-200">
-                      <div className="flex items-center gap-2 text-xs text-slate-600 font-mono">
-                        <MessageSquare size={15} className="text-purple-700" />
-                        <span>XMTP Encrypted Chat Connected</span>
-                      </div>
-                      <Link
-                        to="/jobs/1"
-                        className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
+                  ) : (
+                    myFreelancerJobs.map((job) => (
+                      <div
+                        key={job.id}
+                        onClick={() => navigate(`/jobs/${job.id}`)}
+                        className="bg-slate-50 p-5 rounded-2xl border border-purple-200 space-y-3 cursor-pointer group hover:border-purple-400 transition-all"
                       >
-                        Open Collaboration Hub
-                        <ArrowUpRight size={14} />
-                      </Link>
-                    </div>
-                  </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-bold text-base text-slate-900 group-hover:text-purple-700 transition-colors">
+                              {job.title}
+                            </div>
+                            <p className="text-xs text-slate-600 mt-0.5 font-mono">
+                              Client: <span className="text-purple-700 font-bold">{truncateAddress(job.client)}</span>
+                            </p>
+                          </div>
+                          <span className={`badge-status badge-${job.status.toLowerCase()} shrink-0`}>
+                            {job.status}
+                          </span>
+                        </div>
 
-                  {/* Active Job 2 */}
-                  <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <Link to="/jobs/2" className="font-bold text-base text-slate-900 hover:text-purple-700 transition-colors">
-                          High-Throughput Go Indexer for Polygon Event Logs
-                        </Link>
-                        <p className="text-xs text-slate-600 mt-0.5 font-mono">
-                          Client: <span className="text-purple-700 font-bold">LiquidNode Studio (@0x8f2...192a)</span>
-                        </p>
-                      </div>
-                      <span className="badge-status badge-in-progress shrink-0">
-                        In Progress
-                      </span>
-                    </div>
+                        <div className="grid grid-cols-3 gap-3 font-mono text-xs pt-1">
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                            <span className="text-slate-500 text-[10px] block font-bold uppercase">Escrow Locked</span>
+                            <span className="font-bold text-emerald-700">${parseFloat(job.amountUsdc || '0').toLocaleString()} USDC</span>
+                          </div>
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                            <span className="text-slate-500 text-[10px] block font-bold uppercase">Review Period</span>
+                            <span className="font-bold text-purple-700">{job.reviewPeriodDays} Days</span>
+                          </div>
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                            <span className="text-slate-500 text-[10px] block font-bold uppercase">Category</span>
+                            <span className="font-bold text-slate-900 capitalize">{job.category}</span>
+                          </div>
+                        </div>
 
-                    <div className="grid grid-cols-3 gap-3 font-mono text-xs pt-1">
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                        <span className="text-slate-500 text-[10px] block font-bold uppercase">Escrow Locked</span>
-                        <span className="font-bold text-emerald-700">$6,800 USDC</span>
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+                          <div className="flex items-center gap-2 text-xs text-slate-600 font-mono">
+                            <MessageSquare size={15} className="text-purple-700" />
+                            <span>XMTP Encrypted Chat Connected</span>
+                          </div>
+                          <button
+                            onClick={() => navigate(`/chat/${job.id}`)}
+                            className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            Open Collaboration Hub
+                            <ArrowUpRight size={14} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                        <span className="text-slate-500 text-[10px] block font-bold uppercase">Milestones</span>
-                        <span className="font-bold text-purple-700">1 of 5 Approved</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                        <span className="text-slate-500 text-[10px] block font-bold uppercase">Due In</span>
-                        <span className="font-bold text-slate-900">4 Days</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-200">
-                      <div className="flex items-center gap-2 text-xs text-slate-600 font-mono">
-                        <MessageSquare size={15} className="text-purple-700" />
-                        <span>XMTP Encrypted Chat Connected</span>
-                      </div>
-                      <Link
-                        to="/jobs/2"
-                        className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
-                      >
-                        Submit Proof of Work
-                        <ArrowUpRight size={14} />
-                      </Link>
-                    </div>
-                  </div>
+                    ))
+                  )}
                 </div>
               </section>
             </div>
@@ -510,60 +531,118 @@ export const Dashboard: React.FC = () => {
                 </h3>
 
                 <div className="space-y-3 font-mono text-xs">
-                  <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 space-y-1">
-                    <div className="flex justify-between items-center">
-                      <span className="font-bold text-purple-950">Genesis Auditor SBT</span>
-                      <span className="bg-purple-200 text-purple-900 text-[10px] px-2 py-0.5 rounded font-bold">
-                        Token #1042
-                      </span>
+                  {unlockedBadges.length === 0 ? (
+                    <div className="p-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-center text-slate-500 font-sans">
+                      <p className="font-extrabold text-slate-800">No SBTs Minted Yet</p>
+                      <p className="mt-1 text-[10px] leading-relaxed">Complete your first job or link your GitHub profile to unlock your first dynamic badge attestation.</p>
                     </div>
-                    <p className="text-[10px] text-slate-600">Minted for 10+ audited smart contract escrows with zero bugs.</p>
-                  </div>
-
-                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 space-y-1">
-                    <div className="flex justify-between items-center">
-                      <span className="font-bold text-emerald-950">Escrow Master SBT</span>
-                      <span className="bg-emerald-200 text-emerald-900 text-[10px] px-2 py-0.5 rounded font-bold">
-                        Token #0912
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-600">100% on-time milestone delivery rate across 14 contracts.</p>
-                  </div>
+                  ) : (
+                    unlockedBadges.map((badge, index) => (
+                      <div key={index} className={`p-3 rounded-xl border space-y-1 ${badge.bgClass}`}>
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold">{badge.name}</span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${badge.tokenBgClass}`}>
+                            {badge.token}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-600 leading-relaxed font-sans">{badge.desc}</p>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 <Link
                   to="/reputation"
                   className="w-full glass-panel py-2 text-xs font-bold text-slate-700 border-slate-200 hover:bg-slate-50 rounded-xl text-center block"
                 >
-                  View Global Leaderboard Rank (#42)
+                  View Global Leaderboard Rank (#{myRank})
+                </Link>
+                <Link
+                  to={`/audit/${address}`}
+                  className="w-full mt-2 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-900 py-2 text-xs font-bold rounded-xl text-center block cursor-pointer font-sans"
+                >
+                  Download Certified Audit
                 </Link>
               </div>
 
               {/* GitHub Verified Skill Score */}
-              <div className="glass-panel p-6 border-cyan-200 bg-white hard-shadow space-y-3 font-mono text-xs">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                    <CheckCircle2 size={16} className="text-cyan-700" /> GitHub E-KYC Attestation
-                  </span>
-                  <span className="text-[10px] bg-cyan-100 text-cyan-900 px-2 py-0.5 rounded font-bold">
-                    Score: 850
-                  </span>
+              {userProfile.githubVerified ? (
+                <div className="glass-panel p-6 border-cyan-200 bg-white hard-shadow space-y-3 font-mono text-xs">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <CheckCircle2 size={16} className="text-emerald-700" /> GitHub E-KYC Attestation
+                    </span>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-bold">
+                      Score: {userProfile.primaryScore || 850}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Solidity</span>
+                      <span className="font-bold text-purple-900">
+                        {userProfile.languageBytes?.Solidity
+                          ? `${userProfile.languageBytes.Solidity.toLocaleString()} Bytes`
+                          : '0 Bytes'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Rust</span>
+                      <span className="font-bold text-purple-900">
+                        {userProfile.languageBytes?.Rust
+                          ? `${userProfile.languageBytes.Rust.toLocaleString()} Bytes`
+                          : '0 Bytes'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">TypeScript</span>
+                      <span className="font-bold text-purple-900">
+                        {userProfile.languageBytes?.TypeScript
+                          ? `${userProfile.languageBytes.TypeScript.toLocaleString()} Bytes`
+                          : '0 Bytes'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">JavaScript</span>
+                      <span className="font-bold text-purple-900">
+                        {userProfile.languageBytes?.JavaScript
+                          ? `${userProfile.languageBytes.JavaScript.toLocaleString()} Bytes`
+                          : '0 Bytes'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Python</span>
+                      <span className="font-bold text-purple-900">
+                        {userProfile.languageBytes?.Python
+                          ? `${userProfile.languageBytes.Python.toLocaleString()} Bytes`
+                          : '0 Bytes'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Go / Indexers</span>
+                      <span className="font-bold text-purple-900">
+                        {userProfile.languageBytes?.Go
+                          ? `${userProfile.languageBytes.Go.toLocaleString()} Bytes`
+                          : '0 Bytes'}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Solidity</span>
-                    <span className="font-bold text-purple-900">88,420 Bytes</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Rust</span>
-                    <span className="font-bold text-purple-900">42,100 Bytes</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">TypeScript</span>
-                    <span className="font-bold text-purple-900">120,500 Bytes</span>
-                  </div>
+              ) : (
+                <div className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-3 font-mono text-xs text-center">
+                  <span className="font-bold text-slate-900 flex items-center justify-center gap-1.5">
+                    GitHub Not Attested
+                  </span>
+                  <p className="text-[11px] text-slate-505 font-sans leading-relaxed">
+                    Sync your GitHub account in onboarding to verify your developer reputation scores.
+                  </p>
+                  <Link
+                    to="/onboarding"
+                    className="gradient-btn-primary w-full py-2.5 rounded-xl font-headline font-bold text-xs shadow-md block text-center"
+                  >
+                    Sync GitHub Account
+                  </Link>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>

@@ -7,13 +7,132 @@ import confetti from 'canvas-confetti';
 
 export const Treasury: React.FC = () => {
   const { address } = useWeb3();
-  const { treasury, proposeTreasuryWithdrawal, signTreasuryWithdrawal, executeTreasuryWithdrawal } = usePolyLanceData();
+  const { treasury, proposeTreasuryWithdrawal, signTreasuryWithdrawal, executeTreasuryWithdrawal, treasuryHistory, jobs } = usePolyLanceData();
 
   const [recipient, setRecipient] = useState('');
   const [amountUsdc, setAmountUsdc] = useState('');
   const [purpose, setPurpose] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'terminal' | 'governance'>('overview');
   const [selectedProposalModal, setSelectedProposalModal] = useState<string | null>(null);
+
+  // Generate real-time logs from actual state (jobs, proposals, history)
+  const logs = (() => {
+    const list: { timestamp: string; timeMs: number; text: string; iconType: 'check' | 'code' | 'warning' | 'zap' }[] = [];
+
+    // Helper to format timestamp into LOG hh:mm:ss format
+    const formatLogTime = (ms: number) => {
+      const d = new Date(ms);
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+
+    // 1. Logs from jobs state
+    jobs.forEach((job) => {
+      // Job Created
+      list.push({
+        timestamp: formatLogTime(job.createdAt),
+        timeMs: job.createdAt,
+        text: `Job #${job.id.slice(0, 6).toUpperCase()} Escrow Created - Funded $${parseFloat(job.amountUsdc).toLocaleString()} USDC by Client ${truncateAddress(job.client)}`,
+        iconType: 'code'
+      });
+
+      // Applications
+      job.applications.forEach((app) => {
+        list.push({
+          timestamp: formatLogTime(app.appliedAt),
+          timeMs: app.appliedAt,
+          text: `Developer ${truncateAddress(app.applicant)} applied for Job #${job.id.slice(0, 6).toUpperCase()}`,
+          iconType: 'code'
+        });
+      });
+
+      // Freelancer selected
+      if (job.freelancer) {
+        list.push({
+          timestamp: formatLogTime(job.createdAt + 120000), // 2 mins later
+          timeMs: job.createdAt + 120000,
+          text: `Contractor ${truncateAddress(job.freelancer)} selected for Job #${job.id.slice(0, 6).toUpperCase()}`,
+          iconType: 'check'
+        });
+      }
+
+      // Work submitted
+      if (job.submittedAt || (job.status === 'Submitted' || job.status === 'Completed' || job.status === 'Disputed')) {
+        const subTime = job.submittedAt || (job.createdAt + 240000);
+        list.push({
+          timestamp: formatLogTime(subTime),
+          timeMs: subTime,
+          text: `Job #${job.id.slice(0, 6).toUpperCase()} Work Deliverable Submitted by Developer`,
+          iconType: 'code'
+        });
+      }
+
+      // Dispute raised
+      if (job.dispute) {
+        list.push({
+          timestamp: formatLogTime(job.dispute.raisedAt),
+          timeMs: job.dispute.raisedAt,
+          text: `Job #${job.id.slice(0, 6).toUpperCase()} Disputed - Case filed to DAO by Client`,
+          iconType: 'warning'
+        });
+
+        if (job.dispute.resolved) {
+          list.push({
+            timestamp: formatLogTime(job.dispute.raisedAt + 60000),
+            timeMs: job.dispute.raisedAt + 60000,
+            text: `Job #${job.id.slice(0, 6).toUpperCase()} Dispute Resolved - Arbitrator Ruling Enforced`,
+            iconType: 'check'
+          });
+        }
+      }
+    });
+
+    // 2. Logs from treasury history (completed payments & withdrawals)
+    treasuryHistory.forEach((h) => {
+      const typeText = h.type === 'FEE_COLLECTED' ? 'Fee Ingestion' : 'Safe Withdrawal';
+      const changePrefix = h.type === 'FEE_COLLECTED' ? '+' : '-';
+      list.push({
+        timestamp: formatLogTime(h.timestamp),
+        timeMs: h.timestamp,
+        text: `${typeText}: ${changePrefix}$${h.amountUsdc.toFixed(2)} USDC (Tx: ${h.txHash.slice(0, 10)}...)`,
+        iconType: h.type === 'FEE_COLLECTED' ? 'zap' : 'warning'
+      });
+    });
+
+    // 3. Logs from treasury proposals (multisig proposals)
+    treasury.proposals.forEach((prop) => {
+      // Proposal created
+      const propTime = Date.now() - 3600000; // 1h ago
+      list.push({
+        timestamp: formatLogTime(propTime),
+        timeMs: propTime,
+        text: `Multisig Proposal #${prop.id.slice(0, 4)} Created by Owner: ${truncateAddress(prop.proposer)}`,
+        iconType: 'code'
+      });
+
+      // Signatures
+      prop.signatures.forEach((sig, index) => {
+        list.push({
+          timestamp: formatLogTime(propTime + (index + 1) * 60000),
+          timeMs: propTime + (index + 1) * 60000,
+          text: `Multisig Proposal #${prop.id.slice(0, 4)} Signature Appended by Owner: ${truncateAddress(sig)}`,
+          iconType: 'check'
+        });
+      });
+
+      if (prop.executed) {
+        list.push({
+          timestamp: formatLogTime(propTime + 180000),
+          timeMs: propTime + 180000,
+          text: `Multisig Proposal #${prop.id.slice(0, 4)} Executed - Payout $${parseFloat(prop.amountUsdc).toLocaleString()} USDC to ${truncateAddress(prop.recipient)}`,
+          iconType: 'zap'
+        });
+      }
+    });
+
+    // Sort chronological ascending (oldest first)
+    return list.sort((a, b) => a.timeMs - b.timeMs);
+  })();
 
   const handlePropose = (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,12 +143,12 @@ export const Treasury: React.FC = () => {
     setPurpose('');
   };
 
-  const handleSign = (safeTxHash: string) => {
-    signTreasuryWithdrawal(safeTxHash, address);
+  const handleSign = (proposalId: string) => {
+    signTreasuryWithdrawal(proposalId, address);
   };
 
-  const handleExecute = (safeTxHash: string) => {
-    executeTreasuryWithdrawal(safeTxHash);
+  const handleExecute = (proposalId: string) => {
+    executeTreasuryWithdrawal(proposalId);
     confetti({ particleCount: 100, spread: 70 });
   };
 
@@ -48,7 +167,7 @@ export const Treasury: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-slate-600 font-mono">
-              TREASURY_ADMIN_ROLE: <span className="text-purple-900 font-bold">{truncateAddress(address)}</span> (1-of-2 Threshold Safe)
+              TREASURY_ADMIN_ROLE: <span className="text-purple-900 font-bold">{truncateAddress(address)}</span> ({treasury.requiredSignatures}-of-{treasury.signers.length} Threshold Safe)
             </p>
           </div>
 
@@ -179,38 +298,36 @@ export const Treasury: React.FC = () => {
 
             <div className="space-y-4">
               {treasury.proposals.map((prop) => {
-                const propId = prop.safeTxHash || prop.id;
-                const sigs = prop.confirmations || prop.signatures || [];
-                const reqCount = prop.confirmationsRequired || treasury.requiredSignatures;
-                const executed = prop.isExecuted ?? prop.executed;
-                const hasSigned = sigs.some((s) => s.toLowerCase() === address.toLowerCase());
+                const hasSigned = address
+                  ? prop.signatures.some((s) => s.toLowerCase() === address.toLowerCase())
+                  : false;
                 return (
-                  <div key={propId} className="bg-slate-50 p-5 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-4 font-mono text-xs">
+                  <div key={prop.id} className="bg-slate-50 p-5 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-4 font-mono text-xs">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-sm">{prop.purpose || 'Disbursement'}</span>
-                        <span className="text-emerald-700 font-bold">${parseFloat(prop.amountUsdc || prop.amount || '0').toLocaleString()} USDC</span>
+                        <span className="font-bold text-slate-900 text-sm">{prop.purpose}</span>
+                        <span className="text-emerald-700 font-bold">${parseFloat(prop.amountUsdc).toLocaleString()} USDC</span>
                       </div>
                       <p className="text-slate-600">
-                        To: <span className="text-purple-900 font-bold">{truncateAddress(prop.to || prop.recipient)}</span> | Signers: {sigs.length}/{reqCount} Approved
+                        To: <span className="text-purple-900 font-bold">{truncateAddress(prop.recipient)}</span> | Signers: {prop.signatures.length}/{treasury.requiredSignatures} Approved
                       </p>
                     </div>
 
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => setSelectedProposalModal(propId)}
+                        onClick={() => setSelectedProposalModal(prop.id)}
                         className="bg-white hover:bg-slate-100 border border-slate-300 px-3 py-1.5 rounded-lg text-slate-700 font-bold"
                       >
                         Inspect Payload
                       </button>
 
-                      {executed ? (
+                      {prop.executed ? (
                         <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full text-[10px] font-bold">
                           Executed On-Chain
                         </span>
-                      ) : sigs.length >= reqCount ? (
+                      ) : prop.signatures.length >= treasury.requiredSignatures ? (
                         <button
-                          onClick={() => handleExecute(propId)}
+                          onClick={() => handleExecute(prop.id)}
                           className="gradient-btn-emerald px-4 py-2 rounded-xl text-xs font-bold"
                         >
                           Execute Disbursement
@@ -221,7 +338,7 @@ export const Treasury: React.FC = () => {
                         </span>
                       ) : (
                         <button
-                          onClick={() => handleSign(propId)}
+                          onClick={() => handleSign(prop.id)}
                           className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold"
                         >
                           Sign Transaction
@@ -291,7 +408,7 @@ export const Treasury: React.FC = () => {
                 <CheckCircle2 size={13} className="stroke-[2.5]" />
               </div>
               <div className="font-bold text-emerald-600 leading-relaxed">
-                SAFE STATUS: HEALTHY (TVL $23,400.00 USDC, 2.50 ETH)
+                SAFE STATUS: HEALTHY (TVL ${parseFloat(treasury.balanceUsdc).toLocaleString()} USDC, {treasury.balanceEth} ETH)
               </div>
               <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-3 py-1 rounded-full text-[10px] font-bold font-sans flex items-center gap-1 shadow-3xs">
                 <Zap size={10} className="fill-emerald-100" />
@@ -299,50 +416,42 @@ export const Treasury: React.FC = () => {
               </span>
             </div>
 
-            {/* Line 3: Log item 1 */}
-            <div className="relative flex items-start gap-4">
-              <div className="absolute -left-8 w-6 h-6 rounded-full border border-indigo-100 bg-indigo-50/50 flex items-center justify-center text-indigo-600 shadow-3xs select-none">
-                <FileCode size={12} />
-              </div>
-              <div className="flex items-center gap-2.5 leading-relaxed flex-wrap">
-                <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-md font-bold text-[10px]">
-                  [LOG 14:02:18]
-                </span>
-                <span className="text-slate-600 font-medium">
-                  Job #POL-101 Escrow Completed - Fee Ingestion +$112.50 USDC
-                </span>
-              </div>
-            </div>
+            {logs.map((log, idx) => {
+              let iconBorder = "border-indigo-100 bg-indigo-50/50 text-indigo-600";
+              let Icon = FileCode;
+              if (log.iconType === 'check') {
+                iconBorder = "border-emerald-100 bg-emerald-50/50 text-emerald-600";
+                Icon = CheckCircle2;
+              } else if (log.iconType === 'warning') {
+                iconBorder = "border-amber-100 bg-amber-50/50 text-amber-600";
+                Icon = AlertTriangle;
+              } else if (log.iconType === 'zap') {
+                iconBorder = "border-purple-100 bg-purple-50/50 text-purple-600";
+                Icon = Zap;
+              }
 
-            {/* Line 4: Log item 2 */}
-            <div className="relative flex items-start gap-4">
-              <div className="absolute -left-8 w-6 h-6 rounded-full border border-indigo-100 bg-indigo-50/50 flex items-center justify-center text-indigo-600 shadow-3xs select-none">
-                <FileCode size={12} />
-              </div>
-              <div className="flex items-center gap-2.5 leading-relaxed flex-wrap">
-                <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-md font-bold text-[10px]">
-                  [LOG 14:15:44]
-                </span>
-                <span className="text-slate-600 font-medium">
-                  Multisig Proposal #1 Created by Owner 0x9999...0000
-                </span>
-              </div>
-            </div>
+              return (
+                <div key={idx} className="relative flex items-start gap-4">
+                  <div className={`absolute -left-8 w-6 h-6 rounded-full border flex items-center justify-center shadow-3xs select-none ${iconBorder}`}>
+                    <Icon size={12} />
+                  </div>
+                  <div className="flex items-center gap-2.5 leading-relaxed flex-wrap">
+                    <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-md font-bold text-[10px]">
+                      [LOG {log.timestamp}]
+                    </span>
+                    <span className="text-slate-600 text-slate-600 font-medium font-sans">
+                      {log.text}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
 
-            {/* Line 5: Log item 3 */}
-            <div className="relative flex items-start gap-4">
-              <div className="absolute -left-8 w-6 h-6 rounded-full border border-indigo-100 bg-indigo-50/50 flex items-center justify-center text-indigo-600 shadow-3xs select-none">
-                <FileCode size={12} />
+            {logs.length === 0 && (
+              <div className="text-slate-500 font-medium py-2 font-sans">
+                No logs recorded yet. Escrow operations will appear here in real-time.
               </div>
-              <div className="flex items-center gap-2.5 leading-relaxed flex-wrap">
-                <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-md font-bold text-[10px]">
-                  [LOG 14:16:02]
-                </span>
-                <span className="text-slate-600 font-medium">
-                  EIP-712 Signature Appended by Owner 0x9999...0000
-                </span>
-              </div>
-            </div>
+            )}
 
             {/* Line 6: Ready Proposal state banner */}
             <div className="relative p-4 rounded-2xl bg-purple-50/50 border border-purple-100 flex items-center justify-between gap-4 flex-wrap">
@@ -350,11 +459,11 @@ export const Treasury: React.FC = () => {
                 <Zap size={11} className="fill-purple-300 text-purple-700" />
               </div>
               <div className="font-bold text-purple-700 leading-relaxed">
-                PROPOSAL #1 STATUS: READY_TO_EXECUTE (1/1 SIGS)
+                SAFE REQUIRED THRESHOLD: {treasury.requiredSignatures}-OF-{treasury.signers.length} OWNER SIGNATURES
               </div>
               <span className="bg-purple-100 text-purple-700 border border-purple-200 px-3 py-1 rounded-full text-[10px] font-bold font-sans flex items-center gap-1 shadow-3xs">
                 <CheckCircle2 size={11} className="stroke-[2.5]" />
-                READY
+                ENFORCED
               </span>
             </div>
           </div>

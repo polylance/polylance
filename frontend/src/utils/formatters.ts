@@ -30,6 +30,15 @@ export function formatDaysRemaining(submittedAt: number, reviewPeriodDays: numbe
   return `${remHours}h remaining`;
 }
 
+export function generateMockTxHash(): string {
+  const chars = '0123456789abcdef';
+  let hash = '0x';
+  for (let i = 0; i < 64; i++) {
+    hash += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return hash;
+}
+
 export function generateDeterministicHash(seed: string = Date.now().toString()): string {
   return ethers.keccak256(ethers.toUtf8Bytes(seed));
 }

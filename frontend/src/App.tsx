@@ -1,5 +1,6 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AnimatePresence, motion } from 'motion/react';
 import { Web3Provider, useWeb3 } from './context/Web3Context';
 import { PolyLanceDataProvider } from './context/PolyLanceDataContext';
 import { Navbar } from './components/Navbar';
@@ -16,37 +17,87 @@ import { Dao } from './pages/Dao';
 import { Judge } from './pages/Judge';
 import { Treasury } from './pages/Treasury';
 import { Analytics } from './pages/Analytics';
+import { AuditReport } from './pages/AuditReport';
+import { Chat } from './pages/Chat';
+import { pageVariants, transition } from './lib/motion';
 
+// ── Apple-style page transition wrapper ────────────────────────────────────
 const AnimatedRoutes: React.FC = () => {
   const location = useLocation();
   const { isConnected, currentRole } = useWeb3();
-
   const isVisitor = !isConnected || currentRole === 'visitor';
 
   return (
-    <div key={location.pathname} className="page-transition">
-      <Routes location={location}>
-        {/* PUBLIC & PERCEPTION ACCESS ROUTES */}
-        <Route path="/" element={<Landing />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/jobs" element={<FindJobs />} />
-        <Route path="/jobs/:id" element={<JobDetail />} />
-        <Route path="/reputation" element={<Reputation />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/profile/:address" element={<Profile />} />
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={location.pathname}
+        variants={pageVariants}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        transition={transition.page}
+        style={{ willChange: 'transform, opacity, filter' }}
+      >
+        <Routes location={location}>
+          {/* PUBLIC & PERCEPTION ACCESS ROUTES */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/jobs" element={<FindJobs />} />
+          <Route path="/jobs/:id" element={<JobDetail />} />
+          <Route path="/reputation" element={<Reputation />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/profile/:address" element={<Profile />} />
 
-        {/* ROLE PROTECTED OR PERCEPTION-GUIDED ROUTES */}
-        <Route path="/onboarding" element={isVisitor ? <Navigate to="/login" replace /> : <Onboarding />} />
-        <Route path="/dashboard" element={isVisitor ? <Navigate to="/login" replace /> : <Dashboard />} />
-        <Route path="/dao" element={isVisitor ? <Navigate to="/login" replace /> : <Dao />} />
-        <Route path="/analytics" element={isVisitor ? <Navigate to="/login" replace /> : <Analytics />} />
-        <Route path="/jobs/post" element={currentRole === 'client' ? <PostJob /> : <Navigate to="/jobs" replace />} />
-        <Route path="/judge" element={currentRole === 'judge' ? <Judge /> : <Navigate to="/dashboard" replace />} />
-        <Route path="/treasury" element={currentRole === 'admin' ? <Treasury /> : <Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+          {/* ROLE PROTECTED OR PERCEPTION-GUIDED ROUTES */}
+          <Route path="/onboarding" element={isVisitor ? <Navigate to="/login" replace /> : <Onboarding />} />
+          <Route path="/dashboard" element={isVisitor ? <Navigate to="/login" replace /> : <Dashboard />} />
+          <Route path="/dao" element={isVisitor ? <Navigate to="/login" replace /> : <Dao />} />
+          <Route path="/analytics" element={isVisitor ? <Navigate to="/login" replace /> : <Analytics />} />
+          <Route path="/jobs/post" element={currentRole === 'client' || currentRole === 'admin' ? <PostJob /> : <Navigate to="/jobs" replace />} />
+          <Route path="/judge" element={currentRole === 'judge' || currentRole === 'admin' ? <Judge /> : <Navigate to="/dashboard" replace />} />
+          <Route path="/treasury" element={currentRole === 'admin' ? <Treasury /> : <Navigate to="/dashboard" replace />} />
+
+          {/* Certified trust & reputation audits */}
+          <Route path="/audit/:address" element={<AuditReport />} />
+
+          {/* Chat & Negotiation messages */}
+          <Route path="/chat" element={isVisitor ? <Navigate to="/login" replace /> : <Chat />} />
+          <Route path="/chat/:jobId" element={isVisitor ? <Navigate to="/login" replace /> : <Chat />} />
+
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
+const AppContent: React.FC = () => {
+  return (
+    <div className="min-h-screen bg-[#F6F9FC] text-[#111827] flex flex-col font-sans selection:bg-purple-600 selection:text-white">
+      {/* Production Navbar with Role-Aware Perception Navigation */}
+      <Navbar />
+
+      {/* Main Application Content */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-8 py-6">
+        <AnimatedRoutes />
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-slate-200/80 bg-white/60 backdrop-blur-sm py-6 px-4 md:px-8 text-center text-xs text-slate-500 font-mono">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+          <span>PolyLance MVP © 2026 — Permanent Blockchain Freelance Reputation</span>
+        </div>
+      </footer>
     </div>
   );
+};
+
+const ScrollToTop: React.FC = () => {
+  const { pathname } = useLocation();
+  React.useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
 };
 
 export const App: React.FC = () => {
@@ -54,22 +105,8 @@ export const App: React.FC = () => {
     <Web3Provider>
       <PolyLanceDataProvider>
         <Router>
-          <div className="min-h-screen bg-[#faf8ff] text-[#131b2e] flex flex-col font-sans selection:bg-purple-600 selection:text-white">
-            {/* Production Navbar with Role-Aware Perception Navigation */}
-            <Navbar />
-
-            {/* Main Application Content */}
-            <main className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-8 py-6">
-              <AnimatedRoutes />
-            </main>
-
-            {/* Footer */}
-            <footer className="border-t border-slate-200 bg-white py-6 px-4 md:px-8 text-center text-xs text-slate-600 font-mono">
-              <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
-                <span>PolyLance MVP © 2026 — Permanent Blockchain Freelance Reputation</span>
-              </div>
-            </footer>
-          </div>
+          <ScrollToTop />
+          <AppContent />
         </Router>
       </PolyLanceDataProvider>
     </Web3Provider>

@@ -49,7 +49,7 @@ export interface JobEvent {
 
 export interface ProgressUpdate {
   id: string;
-  ipfsHash: string;
+  ipfsHash?: string;
   progressPercent: number;
   statusNote: string;
   timestamp: number;
@@ -59,13 +59,13 @@ export interface ProgressUpdate {
 
 export interface TimeExtensionRequest {
   id: string;
-  requestIndex: number;
+  requestIndex?: number;
   requestedDays: number;
-  reasonIpfsHash: string;
+  reasonIpfsHash?: string;
   reason: string;
   requestedAt: number;
-  responded: boolean;
-  approved: boolean;
+  responded?: boolean;
+  approved?: boolean;
   status: 'Pending' | 'Approved' | 'Rejected';
   responseNote?: string;
 }
@@ -104,6 +104,7 @@ export interface Job {
   extensionRequests?: TimeExtensionRequest[];
   modificationRequests?: ModificationRequest[];
   events: JobEvent[];
+  chatMessages?: { sender: 'Client' | 'Freelancer' | 'Judge'; text: string; timestamp: number }[];
 }
 
 export interface UserProfile {
@@ -122,38 +123,45 @@ export interface UserProfile {
   secondaryScores?: number[];
   attestationUID?: string;
   reputationSbtCount: number;
+  languageBytes?: Record<string, number>;
+  commitsCount?: number;
+  reposCount?: number;
+  prsCount?: number;
+  reputationTier?: string;
+  role?: 'freelancer' | 'client';
 }
 
 export interface DaoProposal {
-  id: number;
-  title: string;
-  candidateAddress: string;
+  id: number | string;
+  title?: string;
+  candidateAddress?: string;
   candidate?: string;
   proposer?: string;
-  description: string;
+  description?: string;
   rationale?: string;
   votesFor: number;
   votesAgainst: number;
-  endsAt: number;
+  endsAt?: number;
+  createdAt?: number;
   status: 'Active' | 'Executed' | 'Defeated';
   userVoted?: 'FOR' | 'AGAINST';
 }
 
 export interface TreasuryProposal {
   id: string;
-  safeTxHash: string;
+  safeTxHash?: string;
   recipient: string;
-  to: string;
-  amount: string;
+  to?: string;
+  amount?: string;
   amountUsdc: string;
-  tokenAddress: string;
+  tokenAddress?: string;
   purpose: string;
   proposer: string;
   signatures: string[];
-  confirmations: string[];
-  confirmationsRequired: number;
+  confirmations?: string[];
+  confirmationsRequired?: number;
   executed: boolean;
-  isExecuted: boolean;
+  isExecuted?: boolean;
 }
 
 export interface TreasuryState {
@@ -174,3 +182,22 @@ export interface WalletRoleInfo {
   isTreasuryAdmin: boolean;
   reputationCount: number;
 }
+
+export interface JudgeRecord {
+  address: string;
+  name: string;
+  status: 'Active' | 'Suspended';
+  addedAt: number;
+  addedBy: string;
+  notes?: string;
+}
+
+export interface JudgeMessage {
+  id: string;
+  judgeAddress: string;
+  sender: string;
+  senderRole: 'Admin' | 'Judge';
+  text: string;
+  timestamp: number;
+}
+
