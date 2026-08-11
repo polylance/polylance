@@ -37,7 +37,7 @@ jobs:
         run: pip install slither-analyzer --break-system-packages
 
       - name: Static analysis
-        run: slither contracts/ --exclude-dependencies --fail-high --fail-medium
+        run: slither contracts/ --exclude-dependencies --fail-medium
         # Blocks pipeline on High/Medium findings
 
   frontend:
