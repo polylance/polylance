@@ -12,4 +12,5 @@ amoy_deployment_addresses.json
 polylance-chat-service/chat.db
 polylance-chat-service/node_modules
 polylance-chat-service/dist
+polylance-chat-service/target
 polylance-chat-service/.env
