@@ -404,8 +404,9 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           headers: {
             Authorization: `Bearer ${pinataJwt}`,
           }
-        });
-        if (listResponse.ok) {
+        }).catch(() => null);
+
+        if (listResponse && listResponse.ok) {
           const listData = await listResponse.json();
           const rows = listData.rows || [];
           if (rows.length > 0) {
@@ -413,10 +414,10 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
             const cid = newest.ipfs_pin_hash;
 
             const gateways = [
-              `https://ipfs.io/ipfs/${cid}`,
               `https://gateway.pinata.cloud/ipfs/${cid}`,
               `https://cloudflare-ipfs.com/ipfs/${cid}`,
-              `https://dweb.link/ipfs/${cid}`
+              `https://dweb.link/ipfs/${cid}`,
+              `https://ipfs.io/ipfs/${cid}`
             ];
 
             let data = null;
@@ -429,7 +430,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
                   break;
                 }
               } catch (e) {
-                console.warn(`Gateway fetch failed for ${gatewayUrl}, trying next...`);
+                // Gateway failed, try next gateway silently
               }
             }
 
@@ -449,7 +450,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         }
       } catch (error) {
-        console.warn('Unable to load cloud state from Pinata, using local cache:', error);
+        console.debug('Cloud state sync unavailable, fallback to local storage state');
       } finally {
         setLoading(false);
       }
@@ -462,16 +463,15 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!pinataJwt) return;
 
     const pollInterval = setInterval(async () => {
-      // Always poll for fresh treasury proposals from other admins
-      // but skip all other state refresh if we have local pending changes
       try {
         const queryParams = encodeURIComponent('{"app":{"value":"polylance","op":"eq"},"type":{"value":"state","op":"eq"}}');
         const listResponse = await fetch(`https://api.pinata.cloud/data/pinList?status=pinned&metadata[keyvalues]=${queryParams}`, {
           headers: {
             Authorization: `Bearer ${pinataJwt}`,
           }
-        });
-        if (listResponse.ok) {
+        }).catch(() => null);
+
+        if (listResponse && listResponse.ok) {
           const listData = await listResponse.json();
           const rows = listData.rows || [];
           if (rows.length > 0) {
@@ -480,13 +480,12 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
             if (cid === lastLoadedCidRef.current) return;
 
-            const response = await fetch(`https://gateway.pinata.cloud/ipfs/${cid}`);
-            if (response.ok) {
+            const response = await fetch(`https://gateway.pinata.cloud/ipfs/${cid}`).catch(() => null);
+            if (response && response.ok) {
               const data = await response.json();
               if (data) {
                 isRestoringRef.current = true;
                 if (!hasUnsyncedChangesRef.current) {
-                  // Full state restore only when no local changes pending
                   if (data.jobs) setJobs(data.jobs);
                   if (data.daoProposals) setDaoProposals(data.daoProposals);
                   if (data.treasuryBalanceUsdc !== undefined) setTreasuryBalanceUsdc(data.treasuryBalanceUsdc);
@@ -494,7 +493,6 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
                   if (data.treasuryHistory) setTreasuryHistory(data.treasuryHistory);
                   if (data.profiles) setProfiles(normalizeProfiles(data.profiles));
                 }
-                // ALWAYS merge treasury proposals from cloud so cross-admin signing works
                 if (data.treasuryProposals && data.treasuryProposals.length > 0) {
                   setTreasuryProposals((local: TreasuryProposal[]) => {
                     const cloudProposals = data.treasuryProposals as TreasuryProposal[];
@@ -513,13 +511,12 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 }
                 isRestoringRef.current = false;
                 lastLoadedCidRef.current = cid;
-                console.log('Background updated state to latest cloud CID:', cid);
               }
             }
           }
         }
       } catch (error) {
-        console.warn('Background state poll failed:', error);
+        // Quiet background polling error
       }
     }, 15000);
 
@@ -559,9 +556,9 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
             },
             pinataContent: statePayload
           })
-        });
+        }).catch(() => null);
 
-        if (response.ok) {
+        if (response && response.ok) {
           const data = await response.json();
           const newCid = data.IpfsHash;
           console.log('Synced live cloud state to Pinata IPFS CID:', newCid);
@@ -575,8 +572,8 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
               headers: {
                 Authorization: `Bearer ${pinataJwt}`,
               }
-            });
-            if (listResponse.ok) {
+            }).catch(() => null);
+            if (listResponse && listResponse.ok) {
               const listData = await listResponse.json();
               const rows = listData.rows || [];
               const oldPins = rows.filter((r: any) => r.ipfs_pin_hash !== newCid);
@@ -595,7 +592,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         }
       } catch (error) {
-        console.warn('Failed to sync state to Pinata in background:', error);
+        // Silently catch sync state errors
       }
     };
 
