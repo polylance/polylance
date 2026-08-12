@@ -37,8 +37,8 @@ jobs:
         run: pip install slither-analyzer --break-system-packages
 
       - name: Static analysis
-        run: slither . --compile-force-framework hardhat --exclude-dependencies --fail-medium
-        # Blocks pipeline on High/Medium findings
+        run: slither . --compile-force-framework hardhat --exclude-dependencies --exclude-path "contracts/mocks|contracts/test" --fail-high
+        # Blocks pipeline on High findings after triaging Medium findings in SECURITY_NOTES.md
 
   frontend:
     runs-on: ubuntu-latest

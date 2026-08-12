@@ -94,6 +94,7 @@ contract JobEscrow is Initializable, ReentrancyGuard {
         uint256 _reviewPeriod,
         address _paymentToken
     ) external initializer {
+        require(_client != address(0), "Client cannot be zero address");
         factory = msg.sender;
         client = _client;
         descriptionIpfsHash = _descriptionIpfsHash;

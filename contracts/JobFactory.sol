@@ -28,6 +28,7 @@ contract JobFactory is AccessControl {
     event TreasuryWithdrawal(address indexed to, address indexed token, uint256 amount, address indexed by);
 
     constructor(address _jobImplementation, address _reputationSBT) {
+        require(_jobImplementation != address(0), "Implementation cannot be zero address");
         jobImplementation = _jobImplementation;
         reputationSBT = IReputationSBT(_reputationSBT);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -78,6 +79,7 @@ contract JobFactory is AccessControl {
     }
 
     function withdrawTreasury(address token, address to, uint256 amount) external onlyRole(TREASURY_ADMIN_ROLE) {
+        require(to != address(0), "Cannot withdraw to zero address");
         require(amount <= treasuryBalanceByToken[token], "Insufficient treasury balance");
         treasuryBalanceByToken[token] -= amount;
         if (token == address(0)) {

@@ -23,3 +23,13 @@
 ### Tradeoff Analysis
 - **Protection:** Prevents malicious or outgoing judges from front-running a pending removal vote by rushing through unfavorable dispute rulings before execution completes.
 - **Symmetric Delay Tradeoff (Accepted Tradeoff):** Uniform timelock delay means both **judge removals** AND **judge additions** require 2 days to take effect post-vote. This is an intentional simplification over custom asymmetric timing logic to preserve standard OpenZeppelin audited governance contracts.
+
+---
+
+## 3. Slither Static Analysis Triage & Defense
+
+- **`arbitrary-send-eth` (`withdrawTreasury`)**: ACCEPTED — Intentional core treasury mechanism gated strictly by `TREASURY_ADMIN_ROLE` pointing to the Gnosis Safe multi-sig.
+- **`reentrancy-events` / `reentrancy-benign` / `locked-ether` (Attacker Mocks)**: ACCEPTED — `MaliciousReentrancyAttacker.sol` and test mock contracts are test-only exploit harness contracts designed specifically to attempt reentrancy attacks.
+- **`timestamp` comparisons**: ACCEPTED — Used exclusively for multi-day dispute review windows (`DEFAULT_REVIEW_PERIOD = 7 days`) where miner block timestamp drift (±15s) is mathematically immaterial.
+- **`JudgeDAO` abstract methods**: VERIFIED FALSE POSITIVE — `GovernorCountingSimple` and `GovernorVotes` provide concrete implementations of `_quorumReached`, `_voteSucceeded`, and `clock()`. `npx hardhat compile` succeeds 100%.
+- **`missing-zero-check`**: FIXED — Added explicit `require(_client != address(0))` in `JobEscrow.sol` and `require(_jobImplementation != address(0))` / `require(to != address(0))` in `JobFactory.sol`.
