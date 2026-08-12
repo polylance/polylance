@@ -12,14 +12,20 @@ import { startPaymentListener } from "./paymentListener.js";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+const allowedOrigin = process.env.FRONTEND_URL || "https://polylance.codes";
+
+app.use(cors({
+  origin: allowedOrigin,
+  credentials: true,
+}));
 app.use(express.json());
 
 export const server = http.createServer(app);
 export const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "*",
+    origin: allowedOrigin,
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
