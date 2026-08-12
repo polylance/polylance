@@ -1,9 +1,117 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import EthCrypto from "eth-crypto";
 import { ethers } from "ethers";
 import { io as ioClient, Socket as ClientSocket } from "socket.io-client";
 import { recoverPublicKey, createConversationKey, decryptOwnKey, encryptMessage, decryptMessage } from "../crypto/ecies.js";
-import { prisma, server } from "../server.js";
+
+const registryStore = new Map<string, any>();
+const messageStore: any[] = [];
+
+vi.mock("../server.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../server.js")>();
+  const mockPrisma = {
+    conversationKeyRegistry: {
+      upsert: async ({ where, create, update }: any) => {
+        const existing = registryStore.get(where.jobAddress);
+        if (existing) {
+          const updated = { ...existing, ...update };
+          registryStore.set(where.jobAddress, updated);
+          return updated;
+        }
+        registryStore.set(where.jobAddress, create);
+        return create;
+      },
+      findUnique: async ({ where }: any) => {
+        return registryStore.get(where.jobAddress) || null;
+      },
+      update: async ({ where, data }: any) => {
+        const existing = registryStore.get(where.jobAddress);
+        if (!existing) throw new Error("Not found");
+        const updated = { ...existing, ...data };
+        registryStore.set(where.jobAddress, updated);
+        return updated;
+      },
+      create: async ({ data }: any) => {
+        registryStore.set(data.jobAddress, data);
+        return data;
+      },
+    },
+    messageIndex: {
+      deleteMany: async ({ where }: any) => {
+        const initialLen = messageStore.length;
+        for (let i = messageStore.length - 1; i >= 0; i--) {
+          if (messageStore[i].jobAddress === where.jobAddress) {
+            messageStore.splice(i, 1);
+          }
+        }
+        return { count: initialLen - messageStore.length };
+      },
+      findMany: async ({ where }: any) => {
+        return messageStore.filter((m) => m.jobAddress === where.jobAddress);
+      },
+      create: async ({ data }: any) => {
+        const item = { ...data, id: "msg_" + Date.now(), sentAt: new Date() };
+        messageStore.push(item);
+        return item;
+      },
+    },
+  };
+
+  return {
+    ...mod,
+    prisma: mockPrisma,
+  };
+});
+
+const mockPrisma = {
+  conversationKeyRegistry: {
+    upsert: async ({ where, create, update }: any) => {
+      const existing = registryStore.get(where.jobAddress);
+      if (existing) {
+        const updated = { ...existing, ...update };
+        registryStore.set(where.jobAddress, updated);
+        return updated;
+      }
+      registryStore.set(where.jobAddress, create);
+      return create;
+    },
+    findUnique: async ({ where }: any) => {
+      return registryStore.get(where.jobAddress) || null;
+    },
+    update: async ({ where, data }: any) => {
+      const existing = registryStore.get(where.jobAddress);
+      if (!existing) throw new Error("Not found");
+      const updated = { ...existing, ...data };
+      registryStore.set(where.jobAddress, updated);
+      return updated;
+    },
+    create: async ({ data }: any) => {
+      registryStore.set(data.jobAddress, data);
+      return data;
+    },
+  },
+  messageIndex: {
+    deleteMany: async ({ where }: any) => {
+      const initialLen = messageStore.length;
+      for (let i = messageStore.length - 1; i >= 0; i--) {
+        if (messageStore[i].jobAddress === where.jobAddress) {
+          messageStore.splice(i, 1);
+        }
+      }
+      return { count: initialLen - messageStore.length };
+    },
+    findMany: async ({ where }: any) => {
+      return messageStore.filter((m) => m.jobAddress === where.jobAddress);
+    },
+    create: async ({ data }: any) => {
+      const item = { ...data, id: "msg_" + Date.now(), sentAt: new Date() };
+      messageStore.push(item);
+      return item;
+    },
+  },
+};
+
+import { prisma, server, setPrismaInstance } from "../server.js";
 
 const TEST_PORT = 3009;
 const SERVER_URL = `http://localhost:${TEST_PORT}`;
@@ -11,6 +119,7 @@ const SERVER_URL = `http://localhost:${TEST_PORT}`;
 describe("PolyLance Hardened Chat — E2E Socket Security & Crypto Invariants", () => {
   beforeAll(async () => {
     process.env.NODE_ENV = "test";
+    setPrismaInstance(mockPrisma);
     await new Promise<void>((resolve) => {
       server.listen(TEST_PORT, () => resolve());
     });
@@ -159,13 +268,18 @@ describe("PolyLance Hardened Chat — E2E Socket Security & Crypto Invariants", 
       transports: ["websocket"],
     });
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       intruderSocket.on("connect", () => resolve());
+      intruderSocket.on("connect_error", (err) => reject(err));
     });
 
     // 1. Attempt join-job-chat as intruder -> must return UNAUTHORIZED error
     const joinRes = await new Promise<any>((resolve) => {
-      intruderSocket.emit("join-job-chat", { jobAddress }, (res: any) => resolve(res));
+      intruderSocket.emit("join-job-chat", {
+        jobAddress,
+        clientPubKey: clientIdentity.publicKey,
+        freelancerPubKey: freelancerIdentity.publicKey,
+      }, (res: any) => resolve(res));
     });
     expect(joinRes.error).toContain("UNAUTHORIZED");
 

@@ -17,7 +17,7 @@ const JobEscrowABI = [
 export async function startPaymentListener(prisma: PrismaClient, io: Server) {
   const rpcUrl = process.env.RPC_URL || "http://127.0.0.1:8545";
   const factoryAddress = process.env.JOB_FACTORY_ADDRESS;
-  if (!factoryAddress) return;
+  if (!factoryAddress || process.env.NODE_ENV === "test") return;
 
   try {
     const provider = new ethers.JsonRpcProvider(rpcUrl);
