@@ -2,29 +2,41 @@ import { ethers } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
 
+const KNOWN_DEMO_ADDRESSES = [
+  "0xb30F2eFBCEBC529d946e05C9ccE0f1ffFB7e1aB1", // Demo Admin 3 wallet
+  "0x9999888877776666555544443333222211110000", // Demo Client wallet
+  "0x3333444455556666777788889999000011112222", // Demo Freelancer wallet
+  "0x25F6111122223333444455556666777788880e9A", // Demo Safe wallet
+  "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", // Hardhat default account #0
+  "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", // Hardhat default account #1
+];
+
+function assertRealAddress(address: string | undefined, label: string, required: boolean = true): string | undefined {
+  if (!address || address.trim() === "") {
+    if (required) {
+      throw new Error(`SECURITY EXCEPTION: ${label} is not set in environment.`);
+    }
+    return undefined;
+  }
+  if (KNOWN_DEMO_ADDRESSES.map((a) => a.toLowerCase()).includes(address.toLowerCase())) {
+    throw new Error(
+      `SECURITY EXCEPTION: ${label} resolves to a known demo/mock account (${address}). ` +
+      `This address must NEVER be granted production smart contract roles.`
+    );
+  }
+  return address;
+}
+
 export async function bootstrapRoles(): Promise<boolean> {
   const [deployer] = await ethers.getSigners();
   const networkObj = await ethers.provider.getNetwork();
   const network = networkObj.name === "unknown" ? "hardhat" : networkObj.name;
 
-  const YOUR_WALLET = process.env.JUDGE_1_ADDRESS || "";
-  const TEAM_MEMBER_WALLET = process.env.JUDGE_2_ADDRESS || "";
-  const ADMIN_3_WALLET = process.env.JUDGE_3_ADDRESS || "0xb30F2eFBCEBC529d946e05C9ccE0f1ffFB7e1aB1";
-  const TREASURY_SAFE_ADDRESS = process.env.TREASURY_SAFE_ADDRESS || ""; // 2-of-2 Safe, NOT an EOA
-  const ORACLE_SIGNING_ADDRESS = process.env.ORACLE_ADDRESS || ""; // your githubScorer.js signing key's address
-
-  const missing = [
-    ["JUDGE_1_ADDRESS", YOUR_WALLET],
-    ["JUDGE_2_ADDRESS", TEAM_MEMBER_WALLET],
-    ["TREASURY_SAFE_ADDRESS", TREASURY_SAFE_ADDRESS],
-    ["ORACLE_ADDRESS", ORACLE_SIGNING_ADDRESS],
-  ].filter(([, val]) => !val);
-
-  if (missing.length > 0) {
-    console.error("Missing required env vars:", missing.map(([k]) => k).join(", "));
-    console.error("Set these before running bootstrap — refusing to proceed with placeholders.");
-    throw new Error(`Bootstrap failed: missing env vars ${missing.map(([k]) => k).join(", ")}`);
-  }
+  const YOUR_WALLET = assertRealAddress(process.env.JUDGE_1_ADDRESS, "JUDGE_1_ADDRESS", true)!;
+  const TEAM_MEMBER_WALLET = assertRealAddress(process.env.JUDGE_2_ADDRESS, "JUDGE_2_ADDRESS", true)!;
+  const ADMIN_3_WALLET = assertRealAddress(process.env.JUDGE_3_ADDRESS, "JUDGE_3_ADDRESS", false);
+  const TREASURY_SAFE_ADDRESS = assertRealAddress(process.env.TREASURY_SAFE_ADDRESS, "TREASURY_SAFE_ADDRESS", true)!;
+  const ORACLE_SIGNING_ADDRESS = assertRealAddress(process.env.ORACLE_ADDRESS, "ORACLE_ADDRESS", true)!;
 
   const manifestPath = path.join(__dirname, "..", "deployments", `${network}_addresses.json`);
   if (!fs.existsSync(manifestPath)) {
@@ -39,7 +51,7 @@ export async function bootstrapRoles(): Promise<boolean> {
   console.log("Network:", network);
   console.log("Judge 1:", YOUR_WALLET);
   console.log("Judge 2:", TEAM_MEMBER_WALLET);
-  console.log("Admin 3 / Judge 3:", ADMIN_3_WALLET);
+  console.log("Judge 3 (Optional):", ADMIN_3_WALLET ?? "None configured (2-Judge setup)");
   console.log("Treasury Safe:", TREASURY_SAFE_ADDRESS);
   console.log("Oracle:", ORACLE_SIGNING_ADDRESS);
   console.log("═══════════════════════════════════════\n");
@@ -57,13 +69,18 @@ export async function bootstrapRoles(): Promise<boolean> {
   await tx.wait();
   tx = await factory.grantRole(ARBITRATOR_ROLE, TEAM_MEMBER_WALLET);
   await tx.wait();
-  tx = await factory.grantRole(ARBITRATOR_ROLE, ADMIN_3_WALLET);
-  await tx.wait();
-  tx = await factory.grantRole(TREASURY_ADMIN_ROLE, ADMIN_3_WALLET);
-  await tx.wait();
-  tx = await factory.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_3_WALLET);
-  await tx.wait();
-  console.log("    ✓ Judge 1, Judge 2, and Admin 3 (0xb30F2e...) granted ARBITRATOR_ROLE & Admin access");
+
+  if (ADMIN_3_WALLET) {
+    tx = await factory.grantRole(ARBITRATOR_ROLE, ADMIN_3_WALLET);
+    await tx.wait();
+    tx = await factory.grantRole(TREASURY_ADMIN_ROLE, ADMIN_3_WALLET);
+    await tx.wait();
+    tx = await factory.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_3_WALLET);
+    await tx.wait();
+    console.log("    ✓ Judge 1, Judge 2, and Judge 3 granted ARBITRATOR_ROLE & Admin access");
+  } else {
+    console.log("    ✓ Judge 1 and Judge 2 granted ARBITRATOR_ROLE (2-Judge setup)");
+  }
 
   // ── 2. Grant TREASURY_ADMIN_ROLE to the Safe ──
   console.log("2/5 Granting TREASURY_ADMIN_ROLE to Safe...");
@@ -94,12 +111,17 @@ export async function bootstrapRoles(): Promise<boolean> {
   const checks: [string, boolean][] = [
     ["Judge 1 has ARBITRATOR_ROLE", await factory.hasRole(ARBITRATOR_ROLE, YOUR_WALLET)],
     ["Judge 2 has ARBITRATOR_ROLE", await factory.hasRole(ARBITRATOR_ROLE, TEAM_MEMBER_WALLET)],
-    ["Admin 3 has ARBITRATOR_ROLE", await factory.hasRole(ARBITRATOR_ROLE, ADMIN_3_WALLET)],
-    ["Admin 3 has TREASURY_ADMIN_ROLE", await factory.hasRole(TREASURY_ADMIN_ROLE, ADMIN_3_WALLET)],
-    ["Admin 3 has DEFAULT_ADMIN_ROLE", await factory.hasRole(DEFAULT_ADMIN_ROLE, ADMIN_3_WALLET)],
     ["Safe has TREASURY_ADMIN_ROLE", await factory.hasRole(TREASURY_ADMIN_ROLE, TREASURY_SAFE_ADDRESS)],
     ["Oracle has ORACLE_OPERATOR_ROLE", await githubRegistry.hasRole(ORACLE_OPERATOR_ROLE, ORACLE_SIGNING_ADDRESS)],
   ];
+
+  if (ADMIN_3_WALLET) {
+    checks.push(
+      ["Admin 3 has ARBITRATOR_ROLE", await factory.hasRole(ARBITRATOR_ROLE, ADMIN_3_WALLET)],
+      ["Admin 3 has TREASURY_ADMIN_ROLE", await factory.hasRole(TREASURY_ADMIN_ROLE, ADMIN_3_WALLET)],
+      ["Admin 3 has DEFAULT_ADMIN_ROLE", await factory.hasRole(DEFAULT_ADMIN_ROLE, ADMIN_3_WALLET)]
+    );
+  }
   let allPassed = true;
   for (const [label, result] of checks) {
     console.log(`    ${result ? "✓" : "f"} ${label}`);

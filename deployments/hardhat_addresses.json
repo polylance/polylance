@@ -1,12 +1,12 @@
 {
-  "JobEscrowImplementation": "0x5f3f1dBD7B74C6B46e8c44f98792A1dAf8d69154",
-  "JobFactory": "0xCD8a1C3ba11CF5ECfa6267617243239504a98d90",
-  "ReputationSBT": "0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575",
-  "ProfileRegistry": "0x7969c5eD335650692Bc04293B07F5BF2e7A673C0",
-  "GithubReputationRegistry": "0x7bc06c482DEAd17c0e297aFbC32f6e63d3846650",
-  "TimelockController": "0xc351628EB244ec633d5f21fBD6621e1a683B1181",
-  "JudgeDAO": "0xFD471836031dc5108809D173A067e8486B9047A3",
-  "deployedAt": "2026-08-13T09:47:18.087Z",
+  "JobEscrowImplementation": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "JobFactory": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+  "ReputationSBT": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+  "ProfileRegistry": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
+  "GithubReputationRegistry": "0x0165878A594ca255338adfa4d48449f69242Eb8F",
+  "TimelockController": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+  "JudgeDAO": "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+  "deployedAt": "2026-08-13T09:58:55.273Z",
   "network": "hardhat",
   "deployerAddress": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 }
