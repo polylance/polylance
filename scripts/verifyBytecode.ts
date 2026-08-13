@@ -2,7 +2,12 @@ import { ethers } from "hardhat";
 import * as fs from "fs";
 
 async function main() {
-  const addresses = JSON.parse(fs.readFileSync("./deployments/amoy_addresses.json", "utf-8"));
+  const networkObj = await ethers.provider.getNetwork();
+  const network = networkObj.name === "unknown" ? "hardhat" : networkObj.name;
+  const manifestPath = fs.existsSync(`./deployments/${network}_addresses.json`)
+    ? `./deployments/${network}_addresses.json`
+    : "./deployments/hardhat_addresses.json";
+  const addresses = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
   
   console.log("═══════════════════════════════════════");
   console.log(" Verifying Bytecode on Polygon Amoy");

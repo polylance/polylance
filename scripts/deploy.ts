@@ -160,8 +160,13 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
 }
 
 if (require.main === module) {
-  deployContracts().catch((error) => {
-    console.error("Deployment failed:", error);
-    process.exitCode = 1;
-  });
+  deployContracts()
+    .then(async () => {
+      const { bootstrapRoles } = await import("./bootstrap");
+      await bootstrapRoles();
+    })
+    .catch((error) => {
+      console.error("Deployment failed:", error);
+      process.exitCode = 1;
+    });
 }
