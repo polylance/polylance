@@ -20,91 +20,165 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
   const networkObj = await ethers.provider.getNetwork();
   const network = networkObj.name === "unknown" ? "hardhat" : networkObj.name;
 
+  const deploymentsDir = path.join(__dirname, "..", "deployments");
+  fs.mkdirSync(deploymentsDir, { recursive: true });
+
+  const manifestPath = path.join(deploymentsDir, `${network}_addresses.json`);
+  let existing: Record<string, string> = {};
+  if (fs.existsSync(manifestPath)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+      console.log(`Found existing manifest at ${manifestPath}, resuming deployment...`);
+    } catch {
+      existing = {};
+    }
+  }
+
   console.log("═══════════════════════════════════════");
   console.log(" PolyLance MVP Deployment");
   console.log("═══════════════════════════════════════");
   console.log("Network:", network);
   console.log("Deployer:", deployer.address);
-  console.log("Balance:", ethers.formatEther(await ethers.provider.getBalance(deployer.address)), "MATIC");
+  console.log("Balance:", ethers.formatEther(await ethers.provider.getBalance(deployer.address)), "MATIC/POL");
   console.log("═══════════════════════════════════════\n");
 
   // ── 1. JobEscrow implementation ──
-  console.log("1/7 Deploying JobEscrow implementation...");
-  const JobEscrow = await ethers.getContractFactory("JobEscrow");
-  const jobEscrowImpl = await JobEscrow.deploy();
-  await jobEscrowImpl.waitForDeployment();
-  const jobEscrowImplAddr = await jobEscrowImpl.getAddress();
-  console.log("    ✓", jobEscrowImplAddr);
+  let jobEscrowImplAddr = existing.JobEscrowImplementation;
+  if (jobEscrowImplAddr) {
+    console.log("1/7 JobEscrow implementation already deployed:", jobEscrowImplAddr);
+  } else {
+    console.log("1/7 Deploying JobEscrow implementation...");
+    const JobEscrow = await ethers.getContractFactory("JobEscrow");
+    const jobEscrowImpl = await JobEscrow.deploy();
+    await jobEscrowImpl.waitForDeployment();
+    jobEscrowImplAddr = await jobEscrowImpl.getAddress();
+    console.log("    ✓", jobEscrowImplAddr);
+    existing.JobEscrowImplementation = jobEscrowImplAddr;
+    fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2));
+  }
 
   // ── 2. ReputationSBT ──
-  console.log("2/7 Deploying ReputationSBT...");
-  const ReputationSBT = await ethers.getContractFactory("ReputationSBT");
-  const sbt = await ReputationSBT.deploy(deployer.address);
-  await sbt.waitForDeployment();
-  const sbtAddr = await sbt.getAddress();
-  console.log("    ✓", sbtAddr);
+  let sbtAddr = existing.ReputationSBT;
+  if (sbtAddr) {
+    console.log("2/7 ReputationSBT already deployed:", sbtAddr);
+  } else {
+    console.log("2/7 Deploying ReputationSBT...");
+    const ReputationSBT = await ethers.getContractFactory("ReputationSBT");
+    const sbt = await ReputationSBT.deploy(deployer.address);
+    await sbt.waitForDeployment();
+    sbtAddr = await sbt.getAddress();
+    console.log("    ✓", sbtAddr);
+    existing.ReputationSBT = sbtAddr;
+    fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2));
+  }
 
   // ── 3. JobFactory ──
-  console.log("3/7 Deploying JobFactory...");
-  const JobFactory = await ethers.getContractFactory("JobFactory");
-  const factory = await JobFactory.deploy(jobEscrowImplAddr, sbtAddr);
-  await factory.waitForDeployment();
-  const factoryAddr = await factory.getAddress();
-  console.log("    ✓", factoryAddr);
+  let factoryAddr = existing.JobFactory;
+  if (factoryAddr) {
+    console.log("3/7 JobFactory already deployed:", factoryAddr);
+    const sbtContract = await ethers.getContractAt("ReputationSBT", sbtAddr);
+    const MINTER_ROLE = await sbtContract.MINTER_ROLE();
+    const hasMinter = await sbtContract.hasRole(MINTER_ROLE, factoryAddr);
+    if (hasMinter) {
+      console.log("    ✓ Confirmed MINTER_ROLE is already held by JobFactory on ReputationSBT");
+    } else {
+      console.log("    Granting MINTER_ROLE to JobFactory...");
+      let tx = await sbtContract.grantRole(MINTER_ROLE, factoryAddr);
+      await tx.wait();
+      tx = await sbtContract.revokeRole(MINTER_ROLE, deployer.address);
+      await tx.wait();
+      console.log("    ✓ MINTER_ROLE moved to JobFactory, revoked from deployer");
+    }
+  } else {
+    console.log("3/7 Deploying JobFactory...");
+    const JobFactory = await ethers.getContractFactory("JobFactory");
+    const factory = await JobFactory.deploy(jobEscrowImplAddr, sbtAddr);
+    await factory.waitForDeployment();
+    factoryAddr = await factory.getAddress();
+    console.log("    ✓", factoryAddr);
+    existing.JobFactory = factoryAddr;
+    fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2));
 
-  // Grant JobFactory the real MINTER_ROLE on the SBT, revoke deployer's
-  console.log("    Granting MINTER_ROLE to JobFactory...");
-  const MINTER_ROLE = await sbt.MINTER_ROLE();
-  let tx = await sbt.grantRole(MINTER_ROLE, factoryAddr);
-  await tx.wait();
-  tx = await sbt.revokeRole(MINTER_ROLE, deployer.address);
-  await tx.wait();
-  console.log("    ✓ MINTER_ROLE moved to JobFactory, revoked from deployer");
+    const sbtContract = await ethers.getContractAt("ReputationSBT", sbtAddr);
+    const MINTER_ROLE = await sbtContract.MINTER_ROLE();
+    let tx = await sbtContract.grantRole(MINTER_ROLE, factoryAddr);
+    await tx.wait();
+    tx = await sbtContract.revokeRole(MINTER_ROLE, deployer.address);
+    await tx.wait();
+    console.log("    ✓ MINTER_ROLE moved to JobFactory, revoked from deployer");
+  }
 
   // ── 4. ProfileRegistry ──
-  console.log("4/7 Deploying ProfileRegistry...");
-  const ProfileRegistry = await ethers.getContractFactory("ProfileRegistry");
-  const profileRegistry = await ProfileRegistry.deploy();
-  await profileRegistry.waitForDeployment();
-  const profileRegistryAddr = await profileRegistry.getAddress();
-  console.log("    ✓", profileRegistryAddr);
+  let profileRegistryAddr = existing.ProfileRegistry;
+  if (profileRegistryAddr) {
+    console.log("4/7 ProfileRegistry already deployed:", profileRegistryAddr);
+  } else {
+    console.log("4/7 Deploying ProfileRegistry...");
+    const ProfileRegistry = await ethers.getContractFactory("ProfileRegistry");
+    const profileRegistry = await ProfileRegistry.deploy();
+    await profileRegistry.waitForDeployment();
+    profileRegistryAddr = await profileRegistry.getAddress();
+    console.log("    ✓", profileRegistryAddr);
+    existing.ProfileRegistry = profileRegistryAddr;
+    fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2));
+  }
 
   // ── 5. GithubReputationRegistry ──
-  console.log("5/7 Deploying GithubReputationRegistry...");
-  const GithubReputationRegistry = await ethers.getContractFactory("GithubReputationRegistry");
-  const githubRegistry = await GithubReputationRegistry.deploy();
-  await githubRegistry.waitForDeployment();
-  const githubRegistryAddr = await githubRegistry.getAddress();
-  console.log("    ✓", githubRegistryAddr);
+  let githubRegistryAddr = existing.GithubReputationRegistry;
+  if (githubRegistryAddr) {
+    console.log("5/7 GithubReputationRegistry already deployed:", githubRegistryAddr);
+  } else {
+    console.log("5/7 Deploying GithubReputationRegistry...");
+    const GithubReputationRegistry = await ethers.getContractFactory("GithubReputationRegistry");
+    const githubRegistry = await GithubReputationRegistry.deploy();
+    await githubRegistry.waitForDeployment();
+    githubRegistryAddr = await githubRegistry.getAddress();
+    console.log("    ✓", githubRegistryAddr);
+    existing.GithubReputationRegistry = githubRegistryAddr;
+    fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2));
+  }
 
   // ── 6. TimelockController (2-day minDelay = 172800s) ──
-  console.log("6/7 Deploying TimelockController (2-day delay)...");
-  const TimelockController = await ethers.getContractFactory("TimelockController");
-  const timelock = await TimelockController.deploy(
-    172800, // 2 days minDelay
-    [],     // proposers (granted to JudgeDAO below)
-    [ethers.ZeroAddress], // executors (open execution once delay expires)
-    deployer.address
-  );
-  await timelock.waitForDeployment();
-  const timelockAddr = await timelock.getAddress();
-  console.log("    ✓", timelockAddr);
+  let timelockAddr = existing.TimelockController;
+  if (timelockAddr) {
+    console.log("6/7 TimelockController already deployed:", timelockAddr);
+  } else {
+    console.log("6/7 Deploying TimelockController (2-day delay)...");
+    const TimelockController = await ethers.getContractFactory("TimelockController");
+    const timelock = await TimelockController.deploy(
+      172800, // 2 days minDelay
+      [],     // proposers (granted to JudgeDAO below)
+      [ethers.ZeroAddress], // executors (open execution once delay expires)
+      deployer.address
+    );
+    await timelock.waitForDeployment();
+    timelockAddr = await timelock.getAddress();
+    console.log("    ✓", timelockAddr);
+    existing.TimelockController = timelockAddr;
+    fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2));
+  }
 
-  // ── 7. JudgeDAO (bound to ReputationSBT and TimelockController) ──
-  console.log("7/7 Deploying JudgeDAO...");
-  const JudgeDAO = await ethers.getContractFactory("JudgeDAO");
-  const judgeDAO = await JudgeDAO.deploy(sbtAddr, timelockAddr);
-  await judgeDAO.waitForDeployment();
-  const judgeDAOAddr = await judgeDAO.getAddress();
-  console.log("    ✓", judgeDAOAddr);
+  // ── 7. JudgeDAO ──
+  let judgeDAOAddr = existing.JudgeDAO;
+  if (judgeDAOAddr) {
+    console.log("7/7 JudgeDAO already deployed:", judgeDAOAddr);
+  } else {
+    console.log("7/7 Deploying JudgeDAO...");
+    const JudgeDAO = await ethers.getContractFactory("JudgeDAO");
+    const judgeDAO = await JudgeDAO.deploy(sbtAddr, timelockAddr);
+    await judgeDAO.waitForDeployment();
+    judgeDAOAddr = await judgeDAO.getAddress();
+    console.log("    ✓", judgeDAOAddr);
+    existing.JudgeDAO = judgeDAOAddr;
+    fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2));
 
-  // Grant JudgeDAO PROPOSER_ROLE on TimelockController
-  const PROPOSER_ROLE = await timelock.PROPOSER_ROLE();
-  tx = await timelock.grantRole(PROPOSER_ROLE, judgeDAOAddr);
-  await tx.wait();
-  console.log("    ✓ PROPOSER_ROLE on TimelockController granted to JudgeDAO");
+    const timelockContract = await ethers.getContractAt("TimelockController", timelockAddr);
+    const PROPOSER_ROLE = await timelockContract.PROPOSER_ROLE();
+    const tx = await timelockContract.grantRole(PROPOSER_ROLE, judgeDAOAddr);
+    await tx.wait();
+    console.log("    ✓ PROPOSER_ROLE on TimelockController granted to JudgeDAO");
+  }
 
-  // Write manifest
   const addresses: DeploymentAddresses = {
     JobEscrowImplementation: jobEscrowImplAddr,
     JobFactory: factoryAddr,
@@ -118,10 +192,6 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
     deployerAddress: deployer.address,
   };
 
-  const deploymentsDir = path.join(__dirname, "..", "deployments");
-  fs.mkdirSync(deploymentsDir, { recursive: true });
-
-  const manifestPath = path.join(deploymentsDir, `${network}_addresses.json`);
   fs.writeFileSync(manifestPath, JSON.stringify(addresses, null, 2));
 
   if (network === "amoy" || network === "polygonAmoy") {
@@ -153,8 +223,7 @@ export async function deployContracts(): Promise<DeploymentAddresses> {
   console.log("\n═══════════════════════════════════════");
   console.log(" Deployment complete. Manifest written to:");
   console.log(" ", manifestPath);
-  console.log("═══════════════════════════════════════");
-  console.log("\nNext: run bootstrap.ts to configure roles before this is usable.\n");
+  console.log("═══════════════════════════════════════\n");
 
   return addresses;
 }
