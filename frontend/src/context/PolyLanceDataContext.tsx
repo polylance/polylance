@@ -47,11 +47,9 @@ interface PolyLanceDataContextType {
   treasuryHistory: { id: string; type: 'FEE_COLLECTED' | 'WITHDRAWAL'; amountUsdc: number; txHash: string; timestamp: number; by?: string }[];
   profiles: Record<string, UserProfile>;
   judges: JudgeRecord[];
-  judgeMessages: Record<string, JudgeMessage[]>;
   addJudge: (address: string, name: string, notes?: string, addedBy?: string) => void;
   removeJudge: (address: string) => void;
   toggleJudgeStatus: (address: string) => void;
-  sendJudgeChatMessage: (judgeAddress: string, text: string, senderRole: 'Admin' | 'Judge', senderAddress?: string) => void;
   postJob: (jobData: { title: string; description: string; category: any; amountUsdc: string; paymentTokenSymbol?: 'USDC' | 'MATIC'; reviewPeriodDays: number }, clientAddress: string) => Promise<Job>;
   applyToJob: (jobId: string, proposalText: string, applicantAddress: string, skills: string[], githubVerified: boolean, githubScore: number) => Promise<void>;
   selectFreelancer: (jobId: string, freelancerAddress: string) => Promise<void>;
@@ -1575,26 +1573,6 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     }));
   };
 
-  const sendJudgeChatMessage = (judgeAddress: string, text: string, senderRole: 'Admin' | 'Judge', senderAddress?: string) => {
-    if (!judgeAddress || !text.trim()) return;
-    const lower = judgeAddress.toLowerCase();
-    const msg: JudgeMessage = {
-      id: `jmsg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-      judgeAddress: lower,
-      sender: senderAddress || (senderRole === 'Admin' ? 'Admin' : lower),
-      senderRole,
-      text: text.trim(),
-      timestamp: Date.now()
-    };
-    setJudgeMessages(prev => {
-      const existing = prev[lower] || [];
-      return {
-        ...prev,
-        [lower]: [...existing, msg]
-      };
-    });
-  };
-
   return (
     <PolyLanceDataContext.Provider
       value={{
@@ -1607,11 +1585,9 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         treasuryHistory,
         profiles,
         judges,
-        judgeMessages,
         addJudge,
         removeJudge,
         toggleJudgeStatus,
-        sendJudgeChatMessage,
         postJob,
         applyToJob,
         selectFreelancer,

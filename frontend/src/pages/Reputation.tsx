@@ -20,7 +20,7 @@ import {
   Check,
   Shield
 } from 'lucide-react';
-import { motion, Variants } from 'motion/react';
+import { motion, AnimatePresence, type Variants } from 'framer-motion';
 import { staggerContainer, staggerItem, scrollReveal } from '../lib/motion';
 
 export const Reputation: React.FC = () => {
