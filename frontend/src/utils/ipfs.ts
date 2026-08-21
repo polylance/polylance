@@ -1,6 +1,6 @@
 /**
  * IPFS Utility - Simulates IPFS CID v1 generation (bafybeig...) and gateway resolution.
- * Uses high-availability Pinata and Cloudflare IPFS gateways to avoid 504 timeouts.
+ * Uses high-availability Filebase IPFS gateway to resolve IPFS content hashes.
  */
 
 export function generateIpfsCid(content: string | Record<string, any>): string {
@@ -24,5 +24,5 @@ export function getIpfsGatewayUrl(cid: string): string {
   if (!cid) return '#';
   if (cid.startsWith('http')) return cid;
   const cleanCid = cid.replace('ipfs://', '');
-  return `https://gateway.pinata.cloud/ipfs/${cleanCid}`;
+  return `https://ipfs.filebase.io/ipfs/${cleanCid}`;
 }

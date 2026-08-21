@@ -412,7 +412,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
             const cid = newest.ipfs_pin_hash;
 
             const gateways = [
-              `https://gateway.pinata.cloud/ipfs/${cid}`,
+              `https://ipfs.filebase.io/ipfs/${cid}`,
               `https://cloudflare-ipfs.com/ipfs/${cid}`,
               `https://dweb.link/ipfs/${cid}`,
               `https://ipfs.io/ipfs/${cid}`
@@ -478,7 +478,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
             if (cid === lastLoadedCidRef.current) return;
 
-            const response = await fetch(`https://gateway.pinata.cloud/ipfs/${cid}`).catch(() => null);
+            const response = await fetch(`https://ipfs.filebase.io/ipfs/${cid}`).catch(() => null);
             if (response && response.ok) {
               const data = await response.json();
               if (data) {

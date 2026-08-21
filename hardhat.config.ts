@@ -59,7 +59,9 @@ const config: HardhatUserConfig = {
     },
   },
   networks: {
-    hardhat: {},
+    hardhat: {
+      hardfork: "cancun",
+    },
     localhost: {
       url: "http://127.0.0.1:8545",
     },

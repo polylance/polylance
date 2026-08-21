@@ -29,7 +29,7 @@ export async function uploadFile(file: File): Promise<UploadResult> {
   }
 
   const result = await pinata.upload.file(file);
-  const gateway = process.env.PINATA_GATEWAY || "gateway.pinata.cloud";
+  const gateway = process.env.FILEBASE_GATEWAY || "ipfs.filebase.io";
   return {
     cid: result.IpfsHash,
     gatewayUrl: `https://${gateway}/ipfs/${result.IpfsHash}`,
@@ -39,7 +39,7 @@ export async function uploadFile(file: File): Promise<UploadResult> {
 
 export async function uploadJSON(data: Record<string, unknown>): Promise<UploadResult> {
   const result = await pinata.upload.json(data);
-  const gateway = process.env.PINATA_GATEWAY || "gateway.pinata.cloud";
+  const gateway = process.env.FILEBASE_GATEWAY || "ipfs.filebase.io";
   return {
     cid: result.IpfsHash,
     gatewayUrl: `https://${gateway}/ipfs/${result.IpfsHash}`,
