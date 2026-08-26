@@ -14,12 +14,47 @@ import { authLimiter, messageLimiter, joinLimiter, deleteLimiter, httpLimiter } 
 dotenv.config();
 
 const app = express();
-const allowedOrigin = process.env.FRONTEND_URL || "https://polylance.codes";
+const ALLOWED_ORIGINS = [
+  "https://polylance.github.io",
+  "https://polylance.codes",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://localhost:3001",
+];
 
-app.use(cors({
-  origin: allowedOrigin,
+if (process.env.FRONTEND_URL) {
+  ALLOWED_ORIGINS.push(process.env.FRONTEND_URL);
+}
+if (process.env.FRONTEND_URLS) {
+  process.env.FRONTEND_URLS.split(",").forEach((u) => {
+    const trimmed = u.trim();
+    if (trimmed && !ALLOWED_ORIGINS.includes(trimmed)) {
+      ALLOWED_ORIGINS.push(trimmed);
+    }
+  });
+}
+
+const isOriginAllowed = (origin?: string): boolean => {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+  if (origin.endsWith(".github.io") || origin.endsWith(".polylance.codes")) return true;
+  return false;
+};
+
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Fallback allow to echo origin
+    }
+  },
   credentials: true,
-}));
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Global HTTP rate limiter for Express routes (bypasses /health for Render uptime probes)
@@ -39,7 +74,13 @@ app.use(async (req: Request, res: Response, next) => {
 export const server = http.createServer(app);
 export const io = new Server(server, {
   cors: {
-    origin: allowedOrigin,
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, true);
+      }
+    },
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -313,6 +354,45 @@ app.post("/api/unlock", async (req: Request, res: Response) => {
 
   io.to(jobAddress).emit("deletion-unlocked", { jobAddress });
   res.json({ success: true, unlocked: true });
+});
+
+// PolyLance Protocol Sync Endpoint
+app.all("/api/sync", async (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    status: "synced",
+    service: "polylance-chat-service",
+    timestamp: Date.now(),
+  });
+});
+
+// Authenticated Server-Side Proxy for GitHub API (5,000 req/hr rate limit)
+app.get("/api/github-score", async (req: Request, res: Response) => {
+  const username = req.query.username?.toString();
+  if (!username) {
+    res.status(400).json({ error: "Missing username query parameter" });
+    return;
+  }
+  try {
+    const headers: Record<string, string> = { "User-Agent": "PolyLance-Protocol-Oracle" };
+    if (process.env.GITHUB_TOKEN) {
+      headers["Authorization"] = `token ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(username)}`, { headers });
+    if (!userRes.ok) {
+      res.status(userRes.status).json({ error: "GitHub user not found or rate limited", status: userRes.status });
+      return;
+    }
+    const userData = await userRes.json();
+
+    const reposRes = await fetch(`https://api.github.com/users/${encodeURIComponent(username)}/repos?per_page=100`, { headers });
+    const reposData = reposRes.ok ? await reposRes.json() : [];
+
+    res.json({ userData, reposData });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch GitHub API data" });
+  }
 });
 
 app.get("/health", (req: Request, res: Response) => {

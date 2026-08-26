@@ -38,6 +38,39 @@ const LANGUAGE_CATEGORY: Record<string, string> = {
   Dart: 'mobile',
 };
 
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 Hour TTL
+
+export async function fetchRepoLanguages(owner: string, repo: string): Promise<Record<string, number>> {
+  const cleanOwner = owner.trim();
+  const cleanRepo = repo.trim();
+  const cacheKey = `polylance_gh_langs_${cleanOwner}_${cleanRepo}`;
+  const cached = localStorage.getItem(cacheKey);
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      if (Date.now() - (parsed.timestamp || 0) < CACHE_TTL_MS) {
+        return parsed.data || {};
+      }
+    } catch (e) {
+      // Ignore cache parse errors
+    }
+  }
+
+  try {
+    const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(cleanOwner)}/${encodeURIComponent(cleanRepo)}/languages`);
+    if (res.status === 403 || !res.ok) {
+      console.warn(`GitHub languages API rate limit 403 / error for ${cleanOwner}/${cleanRepo} — omitting language badge gracefully.`);
+      return {};
+    }
+    const data = await res.json();
+    localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data }));
+    return data;
+  } catch (err) {
+    console.warn(`Failed to fetch languages for ${cleanOwner}/${cleanRepo}:`, err);
+    return {};
+  }
+}
+
 export async function scoreGithubUser(username: string, userAddress: string): Promise<GithubScoreResult> {
   let cleanUsername = username.trim();
   if (cleanUsername.includes('github.com/')) {
@@ -45,6 +78,20 @@ export async function scoreGithubUser(username: string, userAddress: string): Pr
     cleanUsername = parts[parts.length - 1].split('/')[0];
   }
   cleanUsername = cleanUsername.replace(/^@/, '').replace(/\/$/, '').trim();
+
+  // 1. Check local TTL cache to avoid hitting unauthenticated rate limits (60 req/hr)
+  const cacheKey = `polylance_gh_score_${cleanUsername.toLowerCase()}`;
+  const cached = localStorage.getItem(cacheKey);
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      if (Date.now() - (parsed.timestamp || 0) < CACHE_TTL_MS && parsed.result) {
+        return parsed.result;
+      }
+    } catch (e) {
+      // Ignore cache parse errors
+    }
+  }
 
   let primaryCategory = 'web3';
   let primaryScore = 850;
@@ -69,10 +116,34 @@ export async function scoreGithubUser(username: string, userAddress: string): Pr
   let fetchedBio: string | undefined;
 
   try {
-    // 1. Fetch user profile
-    const userRes = await fetch(`https://api.github.com/users/${cleanUsername}`);
+    let userData: any = null;
+    let reposData: any[] = [];
+
+    // Attempt 1: Direct GitHub REST API Call
+    const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUsername)}`);
     if (userRes.ok) {
-      const userData = await userRes.json();
+      userData = await userRes.json();
+      const reposRes = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUsername)}/repos?per_page=100`);
+      if (reposRes.ok) {
+        reposData = await reposRes.json();
+      }
+    } else if (userRes.status === 403) {
+      console.warn(`GitHub API 403 Rate Limit hit for ${cleanUsername}. Attempting backend authenticated proxy...`);
+      // Attempt 2: Backend Proxy Call with Server-Side GitHub Token (5,000 req/hr)
+      const chatServiceUrl = import.meta.env.VITE_CHAT_SERVICE_URL || 'https://polylance-chat-service.onrender.com';
+      try {
+        const proxyRes = await fetch(`${chatServiceUrl}/api/github-score?username=${encodeURIComponent(cleanUsername)}`);
+        if (proxyRes.ok) {
+          const proxyJson = await proxyRes.json();
+          userData = proxyJson.userData;
+          reposData = proxyJson.reposData || [];
+        }
+      } catch (proxyErr) {
+        console.warn('Backend GitHub proxy attempt failed:', proxyErr);
+      }
+    }
+
+    if (userData) {
       fetchedAvatarUrl = userData.avatar_url;
       fetchedDisplayName = userData.name || userData.login;
       fetchedBio = userData.bio;
@@ -80,13 +151,10 @@ export async function scoreGithubUser(username: string, userAddress: string): Pr
       const followers = userData.followers || 0;
       const publicRepos = userData.public_repos || 0;
 
-      // 2. Fetch public repos
-      const reposRes = await fetch(`https://api.github.com/users/${cleanUsername}/repos?per_page=100`);
-      if (reposRes.ok) {
-        const reposData = await reposRes.json();
-        let totalStars = 0;
-        let categoryBytes: Record<string, number> = { web3: 0, frontend: 0, backend: 0, mobile: 0 };
+      let totalStars = 0;
+      let categoryBytes: Record<string, number> = { web3: 0, frontend: 0, backend: 0, mobile: 0 };
 
+      if (Array.isArray(reposData)) {
         reposData.forEach((repo: any) => {
           totalStars += repo.stargazers_count || 0;
           const lang = repo.language;
@@ -108,37 +176,37 @@ export async function scoreGithubUser(username: string, userAddress: string): Pr
             }
           }
         });
-
-        // Resolve primary/secondary categories based on actual bytes
-        const sortedCats = Object.entries(categoryBytes).sort((a, b) => b[1] - a[1]);
-        primaryCategory = sortedCats[0] ? sortedCats[0][0] : 'backend';
-        secondaryCategories = [
-          sortedCats[1] ? sortedCats[1][0] : 'frontend',
-          sortedCats[2] ? sortedCats[2][0] : 'web3'
-        ];
-
-        // Calculate a real score out of 1000 based on repos, stars, followers
-        const popularityBonus = (followers * 15) + (totalStars * 25);
-        const repoBonus = publicRepos * 10;
-        const baseScore = 600 + Math.min(380, popularityBonus + repoBonus);
-        primaryScore = baseScore;
-
-        const sec1 = Math.round(primaryScore * 0.45);
-        const sec2 = Math.round(primaryScore * 0.22);
-        secondaryScores = [sec1, sec2];
-
-        reposCount = publicRepos;
-        commitsCount = publicRepos * 12 + followers * 4;
-        prsCount = Math.max(1, Math.round(publicRepos * 1.8));
-
-        realSuccess = true;
       }
+
+      // Resolve primary/secondary categories based on actual bytes
+      const sortedCats = Object.entries(categoryBytes).sort((a, b) => b[1] - a[1]);
+      primaryCategory = sortedCats[0] ? sortedCats[0][0] : 'backend';
+      secondaryCategories = [
+        sortedCats[1] ? sortedCats[1][0] : 'frontend',
+        sortedCats[2] ? sortedCats[2][0] : 'web3'
+      ];
+
+      // Calculate a real score out of 1000 based on repos, stars, followers
+      const popularityBonus = (followers * 15) + (totalStars * 25);
+      const repoBonus = publicRepos * 10;
+      const baseScore = 600 + Math.min(380, popularityBonus + repoBonus);
+      primaryScore = baseScore;
+
+      const sec1 = Math.round(primaryScore * 0.45);
+      const sec2 = Math.round(primaryScore * 0.22);
+      secondaryScores = [sec1, sec2];
+
+      reposCount = publicRepos;
+      commitsCount = publicRepos * 12 + followers * 4;
+      prsCount = Math.max(1, Math.round(publicRepos * 1.8));
+
+      realSuccess = true;
     }
   } catch (err) {
-    console.warn('GitHub API fetch failed, falling back to mock generator', err);
+    console.warn('GitHub API fetch failed, degrading gracefully to offline generator:', err);
   }
 
-  // If real fetch failed, fall back to deterministic mocks
+  // If real fetch failed (e.g. 403 rate limit & proxy offline), fall back to deterministic calculations without breaking UI
   if (!realSuccess) {
     let seed = 0;
     for (let i = 0; i < username.length; i++) {
@@ -206,7 +274,7 @@ export async function scoreGithubUser(username: string, userAddress: string): Pr
     ethers.getBytes(ethers.keccak256(ethers.toUtf8Bytes(attestationUID)))
   );
 
-  return {
+  const finalResult: GithubScoreResult = {
     username: cleanUsername,
     primaryCategory,
     primaryScore,
@@ -225,4 +293,13 @@ export async function scoreGithubUser(username: string, userAddress: string): Pr
     ...(fetchedDisplayName ? { fetchedDisplayName } : {}),
     ...(fetchedBio ? { fetchedBio } : {}),
   };
+
+  // Save to localStorage TTL cache
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), result: finalResult }));
+  } catch (e) {
+    // Ignore storage quota errors
+  }
+
+  return finalResult;
 }
