@@ -86,11 +86,20 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   line-height: 1.5;
+  position: relative;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
   background-image:
-    radial-gradient(circle at 85% 15%, rgba(6, 207, 232, 0.08) 0%, transparent 45%),
-    radial-gradient(circle at 15% 85%, rgba(37, 99, 235, 0.06) 0%, transparent 45%),
-    radial-gradient(circle at 50% 50%, rgba(168, 230, 58, 0.03) 0%, transparent 60%);
-  background-attachment: fixed;
+    radial-gradient(circle at 85% 15%, rgba(6, 207, 232, 0.06) 0%, transparent 45%),
+    radial-gradient(circle at 15% 85%, rgba(37, 99, 235, 0.04) 0%, transparent 45%),
+    radial-gradient(circle at 50% 50%, rgba(147, 51, 234, 0.02) 0%, transparent 60%);
+  transform: translateZ(0);
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -121,21 +130,19 @@ h1, h2, h3, h4, h5, h6 {
 
 .glass-panel {
   background: var(--bg-card);
-  backdrop-filter: blur(16px) saturate(180%);
-  -webkit-backdrop-filter: blur(16px) saturate(180%);
   border: 1px solid var(--border-subtle);
   border-radius: 18px;
   box-shadow: var(--shadow-md);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: transform, box-shadow, border-color;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+  transform: translateZ(0);
 }
 
 .glass-panel:hover,
 .glass-panel-interactive:hover {
   background: var(--bg-card-hover);
   border-color: var(--primary);
-  transform: translateY(-3px);
-  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.09), 0 0 16px rgba(6, 207, 232, 0.12);
+  transform: translateY(-2px) translateZ(0);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08), 0 0 12px rgba(6, 207, 232, 0.10);
 }
 
 /* Glass Inputs (Light Minimalist) */
@@ -148,7 +155,7 @@ h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-sans);
   font-size: 0.95rem;
   outline: none;
-  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
 
 .glass-input::placeholder {
@@ -164,11 +171,11 @@ h1, h2, h3, h4, h5, h6 {
 /* Elevation Accents */
 .hard-shadow {
   box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06);
-  transition: box-shadow 0.25s ease, transform 0.25s ease;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .hard-shadow:hover {
-  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.10);
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.09);
 }
 
 .hard-shadow-subtle {
@@ -610,15 +617,28 @@ select:focus {
 .liquid-glass {
   background: linear-gradient(
     135deg,
-    rgba(255, 255, 255, 0.82),
-    rgba(255, 255, 255, 0.58)
+    rgba(255, 255, 255, 0.85),
+    rgba(255, 255, 255, 0.65)
   );
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.75);
   box-shadow:
     0 10px 35px rgba(31, 38, 135, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+}
+
+/* GPU Hardware Acceleration & Silky 60fps Smooth Compositing */
+.gpu-layer,
+.glass-panel,
+.nav-pill-item,
+.apple-button {
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 /* Hero ambient light — subtle radial decoration */
@@ -626,13 +646,8 @@ select:focus {
   background:
     radial-gradient(circle at 20% 20%, rgba(37,99,235,0.08) 0%, transparent 35%),
     radial-gradient(circle at 80% 20%, rgba(6,207,232,0.10) 0%, transparent 35%),
-    radial-gradient(circle at 50% 80%, rgba(168,230,58,0.05) 0%, transparent 40%);
-  animation: ambientShift 12s ease-in-out infinite alternate;
-}
-@keyframes ambientShift {
-  0%   { opacity: 0.8; }
-  50%  { opacity: 1.0; }
-  100% { opacity: 0.85; }
+    radial-gradient(circle at 50% 80%, rgba(147,51,234,0.04) 0%, transparent 40%);
+  transform: translate3d(0, 0, 0);
 }
 
 /* Mobile-friendly: reduce blur on smaller devices */
@@ -640,6 +655,94 @@ select:focus {
   .liquid-glass {
     backdrop-filter: blur(16px) saturate(160%);
     -webkit-backdrop-filter: blur(16px) saturate(160%);
+  }
+}
+
+/* Print optimization for Audit and Attestation reports (Clean 1-2 page PDFs with NO navbar) */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 4mm 6mm;
+  }
+  
+  header,
+  nav,
+  footer,
+  .no-print,
+  #navbar,
+  [data-navbar] {
+    display: none !important;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    font-size: 10.5px !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body::before,
+  body::after {
+    display: none !important;
+    content: none !important;
+  }
+
+  .audit-sheet {
+    box-shadow: none !important;
+    border: 1px solid #cbd5e1 !important;
+    padding: 16px !important;
+    margin: 0 auto !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    background: #ffffff !important;
+    page-break-inside: auto !important;
+  }
+
+  /* Strict Single-Page Certificate Rules */
+  .attestation-sheet {
+    box-shadow: none !important;
+    border: 1.5px solid #cbd5e1 !important;
+    padding: 14px 18px !important;
+    margin: 0 auto !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    max-height: 285mm !important;
+    background: #ffffff !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    overflow: hidden !important;
+  }
+
+  .attestation-sheet * {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .page-break-inside-avoid {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .print-compact {
+    gap: 6px !important;
+    margin-top: 4px !important;
+    margin-bottom: 4px !important;
+    padding: 6px !important;
+  }
+
+  .print-compact-py {
+    padding-top: 3px !important;
+    padding-bottom: 3px !important;
+  }
+
+  .print-page-break {
+    page-break-before: always !important;
+    break-before: page !important;
   }
 }
 

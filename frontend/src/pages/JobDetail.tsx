@@ -1,28 +1,31 @@
 import React, { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { useWeb3 } from '../context/Web3Context';
-import { usePolyLanceData } from '../context/PolyLanceDataContext';
+import { usePolyLanceData, getBackendSyncUrl } from '../context/PolyLanceDataContext';
 import { EscrowTimeline } from '../components/EscrowTimeline';
 import { ApplicantTable } from '../components/ApplicantTable';
 import { DisputePanel } from '../components/DisputePanel';
 import { DeliverableWorkSubmissionPanel } from '../components/DeliverableWorkSubmissionPanel';
 import { DisputeReason, UserProfile } from '../types';
-import { truncateAddress, formatDaysRemaining } from '../utils/formatters';
+import { truncateAddress, formatDaysRemaining, formatTimeAgo, getDeterministicSbtId } from '../utils/formatters';
 import { getIpfsGatewayUrl, generateIpfsCid } from '../utils/ipfs';
-import { Shield, Clock, Send, DollarSign, CheckCircle2, AlertTriangle, MessageSquare, ExternalLink, ArrowLeft, FileText, Star, Building2, Receipt, Award } from 'lucide-react';
+import { getJobInactivityStatus } from '../utils/inactivity';
+import { Shield, ShieldCheck, Wallet, Clock, Send, DollarSign, CheckCircle2, AlertTriangle, MessageSquare, ExternalLink, ArrowLeft, FileText, Star, Building2, Receipt, Award, Github, Sparkles, ArrowUpRight, Calendar, Trash2, RefreshCw, Share2, Loader2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { ErrorState } from '../components/UIStates';
+import { ActionStatusModal, ActionModalDetail } from '../components/ActionStatusModal';
+import { FormattedJobDescription } from '../components/FormattedJobDescription';
 
 export const JobDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  
-  React.useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [id]);
+  const navigate = useNavigate();
 
   const { address, isConnected, isArbitrator, currentRole, connectWallet } = useWeb3();
   const {
     jobs,
+    deleteJob,
+    renewJob,
     applyToJob,
     selectFreelancer,
     proposeTerms,
@@ -32,31 +35,148 @@ export const JobDetail: React.FC = () => {
     submitDisputeResponse,
     resolveDispute,
     sendChatMessage,
+    sendPreAcceptMessage,
     profiles,
   } = usePolyLanceData();
+
+  const [isResolvingJob, setIsResolvingJob] = useState(() => {
+    return !jobs.some(
+      (j) =>
+        (j.id && j.id.toLowerCase() === id?.toLowerCase()) ||
+        (j.contractAddress && j.contractAddress.toLowerCase() === id?.toLowerCase())
+    );
+  });
+
+  React.useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+
+    let mounted = true;
+    const existing = jobs.find(
+      (j) =>
+        (j.id && j.id.toLowerCase() === id?.toLowerCase()) ||
+        (j.contractAddress && j.contractAddress.toLowerCase() === id?.toLowerCase())
+    );
+
+    if (existing) {
+      setIsResolvingJob(false);
+      return;
+    }
+
+    setIsResolvingJob(true);
+    const syncUrl = getBackendSyncUrl();
+    const headers: Record<string, string> = {};
+    if (address) headers['x-wallet-address'] = address.toLowerCase();
+
+    fetch(`${syncUrl}/api/sync`, { headers })
+      .then((r) => r.json())
+      .catch(() => {})
+      .finally(() => {
+        if (mounted) {
+          setTimeout(() => {
+            if (mounted) setIsResolvingJob(false);
+          }, 600);
+        }
+      });
+
+    const timer = setTimeout(() => {
+      if (mounted) setIsResolvingJob(false);
+    }, 2500);
+
+    return () => {
+      mounted = false;
+      clearTimeout(timer);
+    };
+  }, [id, jobs.length, address]);
+
+  const handleKeepJobActive = async () => {
+    if (!job) return;
+    await renewJob(job.id);
+    setActionModal({
+      isOpen: true,
+      title: 'Job Posting Renewed',
+      subtitle: 'Your job posting has been renewed and will remain active on the marketplace for another 10 days.',
+      icon: 'success',
+      badgeText: 'RENEWED',
+      details: [
+        { label: 'Job Title', value: job.title },
+        { label: 'Status', value: 'Active / Open', isBadge: true },
+        { label: 'Retention Cycle', value: '+10 Days from today' },
+      ],
+    });
+  };
+
+  const handleRemoveJobPost = async () => {
+    if (!job) return;
+    const confirmed = window.confirm(
+      'Are you sure you want to remove this job posting? It will be permanently cleaned from the marketplace, site, and database.'
+    );
+    if (!confirmed) return;
+    await deleteJob(job.id);
+    navigate('/jobs');
+  };
 
   const [applyProposalText, setApplyProposalText] = useState('');
   const [isApplyingModalOpen, setIsApplyingModalOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
+  const [freelancerPreAcceptInput, setFreelancerPreAcceptInput] = useState('');
+
+  const handleFreelancerSendPreAccept = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!job || !freelancerPreAcceptInput.trim()) return;
+    sendPreAcceptMessage(job.id, freelancerPreAcceptInput.trim(), address || '', 'Freelancer');
+    setFreelancerPreAcceptInput('');
+  };
 
   const [disputeReason, setDisputeReason] = useState<DisputeReason>('QUALITY');
   const [disputeEvidenceText, setDisputeEvidenceText] = useState('');
   const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
 
-  const job = jobs.find((j) => j.id === id || j.contractAddress.toLowerCase() === id?.toLowerCase());
+  // In-App Action Status Modal State
+  const [actionModal, setActionModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle?: string;
+    icon?: 'success' | 'progress' | 'extension' | 'modification' | 'dispute' | 'payment' | 'terms';
+    badgeText?: string;
+    details?: ActionModalDetail[];
+    primaryActionText?: string;
+    onPrimaryAction?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+  });
+
+  const job = jobs.find((j) => (j.id && j.id.toLowerCase() === id?.toLowerCase()) || (j.contractAddress && j.contractAddress.toLowerCase() === id?.toLowerCase()));
   const chatMessages = job?.chatMessages || [
     { sender: 'Client' as const, text: 'Welcome! Let us finalize the project scope and deliverables before funding.', timestamp: job?.createdAt || Date.now() - 3600000 }
   ];
 
   if (!job) {
+    if (isResolvingJob) {
+      return (
+        <div className="max-w-xl mx-auto py-24 text-center space-y-4 font-sans">
+          <div className="w-14 h-14 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center mx-auto border border-purple-100 shadow-sm animate-pulse">
+            <RefreshCw className="animate-spin" size={24} />
+          </div>
+          <h2 className="text-xl font-headline font-bold text-slate-900">
+            Synchronizing Escrow Contract...
+          </h2>
+          <p className="text-xs text-slate-500 font-mono">
+            Fetching verified on-chain job data and escrow state across the PolyLance network for ID: {id}
+          </p>
+        </div>
+      );
+    }
     return (
-      <div className="max-w-xl mx-auto py-16 text-center space-y-4">
-        <AlertTriangle className="w-12 h-12 text-amber-600 mx-auto" />
-        <h2 className="text-xl font-bold text-slate-900 font-headline">Job Contract Not Found</h2>
-        <p className="text-xs text-slate-500 font-mono">Address or ID: {id}</p>
-        <Link to="/jobs" className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold inline-block">
-          Return to Find Jobs
-        </Link>
+      <div className="max-w-xl mx-auto py-16">
+        <ErrorState
+          title="Job Contract Not Found"
+          description={`We couldn't locate an active smart contract escrow for ID: ${id}. It may have expired or been removed.`}
+          onRetry={() => window.location.reload()}
+          onDashboard={() => window.location.hash = '#/jobs'}
+        />
       </div>
     );
   }
@@ -70,27 +190,108 @@ export const JobDetail: React.FC = () => {
   const freelancerProfile = freelancerProfileKey ? profiles[freelancerProfileKey] : null;
   const freelancerDisplayName = freelancerProfile?.displayName || (freelancerAddr ? 'Anonymous Freelancer' : 'Unassigned');
 
+  const currentUserProfKey = address ? Object.keys(profiles).find(k => k.toLowerCase() === address.toLowerCase()) : null;
+  const currentUserProf = currentUserProfKey ? profiles[currentUserProfKey] : null;
+  const isUserVerified = Boolean(currentUserProf?.githubVerified);
+
   const isClient = Boolean(isConnected && address && address.toLowerCase() === job.client.toLowerCase());
   const isFreelancer = Boolean(isConnected && address && job.freelancer && address.toLowerCase() === job.freelancer.toLowerCase());
   const isParty = isClient || isFreelancer;
-  const hasApplied = Boolean(isConnected && address && job.applications.some((a) => a.applicant.toLowerCase() === address.toLowerCase()));
+  const hasApplied = Boolean(isConnected && address && (job.applications || []).some((a) => a.applicant.toLowerCase() === address.toLowerCase()));
+
+  const getFormattedPayout = (amtUsdc: string, tokenSym?: string, amtEth?: string) => {
+    const sym = (tokenSym || 'USDC').toUpperCase();
+    if (sym === 'ETH') {
+      return `${amtEth || (parseFloat(amtUsdc || '0') / 2500).toFixed(4)} ETH`;
+    }
+    if (sym === 'MATIC' || sym === 'POL') {
+      return `${amtEth || amtUsdc} POL`;
+    }
+    return `$${parseFloat(amtUsdc || '0').toLocaleString()} ${sym}`;
+  };
 
   const handleApplySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!applyProposalText.trim()) return;
-    const userProfKey = address ? Object.keys(profiles).find(k => k.toLowerCase() === address.toLowerCase()) : null;
-    const userProf = ((userProfKey ? profiles[userProfKey] : null) || {}) as UserProfile;
+    if (!isUserVerified) {
+      setActionModal({
+        isOpen: true,
+        title: 'GitHub Verification Required',
+        subtitle: 'Sybil-resistant verification is required before submitting job applications.',
+        icon: 'extension',
+        badgeText: 'VERIFICATION NEEDED',
+        details: [
+          { label: 'Requirement', value: 'GitHub OAuth Verification' },
+          { label: 'Action', value: 'Go to Profile Page to Verify' },
+        ],
+      });
+      return;
+    }
     applyToJob(
       job.id,
       applyProposalText,
       address,
-      userProf.skills || ['Developer'],
-      Boolean(userProf.githubVerified),
-      userProf.primaryScore || 750
+      currentUserProf?.skills || ['Developer'],
+      Boolean(currentUserProf?.githubVerified),
+      currentUserProf?.primaryScore || 750
     );
     setIsApplyingModalOpen(false);
     setApplyProposalText('');
+    confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+    const payoutStr = getFormattedPayout(job.amountUsdc, job.paymentTokenSymbol, job.amountEth);
+    setActionModal({
+      isOpen: true,
+      title: 'Job Proposal Submitted On-Chain',
+      subtitle: 'Your verified application and proposal have been recorded and sent to the client.',
+      icon: 'success',
+      badgeText: 'PROPOSAL ACTIVE',
+      details: [
+        { label: 'Escrow Budget', value: payoutStr, isBadge: true },
+        { label: 'Applicant', value: truncateAddress(address || ''), isMono: true },
+        { label: 'Review SLA', value: `${job.reviewPeriodDays || 7} Days` },
+      ],
+    });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleProposeTermsAction = (jobId: string, userAddr: string) => {
+    proposeTerms(jobId, userAddr);
+    confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
+    const payoutStr = getFormattedPayout(job.amountUsdc, job.paymentTokenSymbol, job.amountEth);
+    setActionModal({
+      isOpen: true,
+      title: 'Milestone Terms Agreed On-Chain',
+      subtitle: 'Your acceptance of the project scope and SLA terms has been signed and recorded.',
+      icon: 'terms',
+      badgeText: 'TERMS FINALIZED',
+      details: [
+        { label: 'Agreement Status', value: 'Terms Accepted', isBadge: true },
+        { label: 'Milestone Payout', value: payoutStr },
+        { label: 'Escrow Address', value: truncateAddress(job.contractAddress), isMono: true, explorerUrl: `https://polygonscan.com/address/${job.contractAddress}` },
+      ],
+      primaryActionText: 'Awesome! Take me to Dashboard',
+      onPrimaryAction: () => navigate('/dashboard'),
+    });
+  };
+
+  const handleFundJobAction = (jobId: string) => {
+    fundJob(jobId);
+    confetti({ particleCount: 110, spread: 80, origin: { y: 0.6 } });
+    const payoutStr = getFormattedPayout(job.amountUsdc, job.paymentTokenSymbol, job.amountEth);
+    setActionModal({
+      isOpen: true,
+      title: 'Escrow Deposit Funded Successfully',
+      subtitle: `Milestone funds (${payoutStr}) are now locked in the standalone JobEscrow smart contract.`,
+      icon: 'payment',
+      badgeText: 'ESCROW ACTIVE',
+      details: [
+        { label: 'Escrow Locked', value: payoutStr, isBadge: true },
+        { label: 'Escrow Clone', value: truncateAddress(job.contractAddress), isMono: true, explorerUrl: `https://polygonscan.com/address/${job.contractAddress}` },
+        { label: 'Next Step', value: 'Freelancer Deliverables In Progress' },
+      ],
+      primaryActionText: 'Awesome! Take me to Dashboard',
+      onPrimaryAction: () => navigate('/dashboard'),
+    });
   };
 
   const handleSendMessage = (e: React.FormEvent) => {
@@ -103,19 +304,52 @@ export const JobDetail: React.FC = () => {
   const handleReleasePayment = () => {
     releasePayment(job.id);
     confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+    const payoutStr = getFormattedPayout(job.amountUsdc, job.paymentTokenSymbol, job.amountEth);
+    setActionModal({
+      isOpen: true,
+      title: 'Payment Released & SBT Minted',
+      subtitle: 'Escrow funds have been transferred directly to the freelancer, and an on-chain reputation SBT has been minted.',
+      icon: 'payment',
+      badgeText: 'TRANSACTION SETTLED',
+      details: [
+        { label: 'Amount Released', value: payoutStr, isBadge: true },
+        { label: 'Freelancer', value: truncateAddress(job.freelancer || ''), isMono: true },
+        { label: 'Contract', value: truncateAddress(job.contractAddress), isMono: true, explorerUrl: `https://polygonscan.com/address/${job.contractAddress}` },
+      ],
+      primaryActionText: 'View Soulbound Attestation Certificate',
+      onPrimaryAction: () => navigate(`/jobs/${job.id}/attestation`),
+    });
   };
 
   const handleRaiseDisputeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!disputeEvidenceText.trim()) return;
     const evidenceCid = generateIpfsCid({ disputeEvidenceText, timestamp: Date.now() });
-    raiseDispute(job.id, disputeReason, disputeEvidenceText, evidenceCid, address);
+    raiseDispute(job.id, disputeReason, disputeEvidenceText, evidenceCid, address || '');
     setIsDisputeModalOpen(false);
+    setActionModal({
+      isOpen: true,
+      title: 'Escrow Case Escalated to DAO Judges',
+      subtitle: 'Your evidence and case details have been registered on-chain for decentralized arbitration.',
+      icon: 'dispute',
+      badgeText: 'DISPUTE SUBMITTED',
+      details: [
+        { label: 'Dispute Reason', value: disputeReason, isBadge: true },
+        { label: 'IPFS Evidence CID', value: evidenceCid, isMono: true },
+        { label: 'Contract Address', value: truncateAddress(job.contractAddress), isMono: true },
+      ],
+    });
   };
+
+  const inactivityStatus = getJobInactivityStatus(job);
 
   return (
     <div className="space-y-8 py-6 max-w-6xl mx-auto">
       {/* Top Breadcrumb & Status Header */}
+      <ActionStatusModal 
+        {...actionModal} 
+        onClose={() => setActionModal({ ...actionModal, isOpen: false })} 
+      />
       <div className="flex flex-wrap items-center justify-between gap-4">
         <Link to="/jobs" className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 font-mono font-bold">
           <ArrowLeft size={14} /> Back to Find Jobs
@@ -124,6 +358,65 @@ export const JobDetail: React.FC = () => {
           Status: {job.status}
         </span>
       </div>
+
+      {/* 10-Day Client Inactivity Reminder Banner (14-Day Auto-Removal Policy) */}
+      {inactivityStatus.isReminderActive && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-amber-50 border border-amber-300 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="text-amber-600 shrink-0 mt-0.5" size={20} />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-headline font-bold text-amber-950 text-sm">
+                  10-Day Client Inactivity Reminder
+                </span>
+                <span className="bg-amber-200 text-amber-900 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full">
+                  {inactivityStatus.daysRemaining} DAY{inactivityStatus.daysRemaining === 1 ? '' : 'S'} REMAINING
+                </span>
+              </div>
+              <p className="text-xs text-amber-800 leading-relaxed font-sans">
+                This job was posted {Math.floor(inactivityStatus.daysElapsed)} days ago without an applicant selected or client response. Per protocol policy, jobs with no client action are automatically removed from the marketplace and database on Day 14.
+              </p>
+            </div>
+          </div>
+
+          {isClient && (
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <button
+                onClick={async () => {
+                  const ok = await renewJob(job.id);
+                  if (ok) {
+                    confetti({ particleCount: 50, spread: 60 });
+                    setActionModal({
+                      isOpen: true,
+                      title: 'Job Posting Renewed',
+                      subtitle: 'The 14-day inactivity timer has been refreshed for this job posting.',
+                      icon: 'success',
+                      badgeText: 'TIMER RESET',
+                    });
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              >
+                <RefreshCw size={13} />
+                <span>Renew (Keep Active)</span>
+              </button>
+
+              <button
+                onClick={async () => {
+                  if (window.confirm('Are you sure you want to cancel and remove this job posting now?')) {
+                    const ok = await deleteJob(job.id);
+                    if (ok) navigate('/dashboard');
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 text-xs font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Trash2 size={13} />
+                <span>Remove Now</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Main 2-Column Layout matching job_detail_status_open/code.html */}
       <div className="grid grid-cols-12 gap-8 items-start">
@@ -150,6 +443,10 @@ export const JobDetail: React.FC = () => {
             <div className="flex flex-wrap gap-2 pt-1">
               <span className="bg-purple-50 border border-purple-200 px-3 py-1 rounded text-xs font-mono text-purple-900 font-bold">
                 {job.category}
+              </span>
+              <span className="bg-purple-50 text-purple-800 border border-purple-200 px-3 py-1 rounded text-xs font-mono font-bold flex items-center gap-1.5">
+                <Clock size={13} className="text-purple-600" />
+                Posted: {new Date(job.createdAt || Date.now()).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ({formatTimeAgo(job.createdAt || Date.now())})
               </span>
               <span className="bg-slate-100 border border-slate-200 px-3 py-1 rounded text-xs font-mono text-slate-700">
                 Review Window: {job.reviewPeriodDays} Days
@@ -185,7 +482,45 @@ export const JobDetail: React.FC = () => {
 
           </div>
 
-          {/* Job Description Card with CID tag */}
+
+
+          {/* 10-Day Retention & Database Cleaning Alert for Client */}
+          {isClient && (Date.now() - (job.createdAt || Date.now()) >= 10 * 24 * 60 * 60 * 1000) && job.status === 'Open' && (
+            <div className="p-5 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-950 space-y-3 shadow-md animate-fade-in">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shrink-0 mt-0.5">
+                  <AlertTriangle size={22} />
+                </div>
+                <div className="space-y-1 flex-1">
+                  <h3 className="font-headline font-bold text-sm text-amber-900">
+                    10-Day Job Retention & Database Cleaning Alert
+                  </h3>
+                  <p className="text-xs text-amber-800 leading-relaxed font-sans font-medium">
+                    This job posting was created over 10 days ago (on {new Date(job.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}). To help keep the site, marketplace, and database clean and performant, please choose whether to keep this job active or remove and clean it permanently from the site and database.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-amber-200/80">
+                <button
+                  type="button"
+                  onClick={handleKeepJobActive}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                >
+                  <RefreshCw size={13} /> Keep Job Active (+10 Days)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemoveJobPost}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                >
+                  <Trash2 size={13} /> Remove & Clean from Database
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Job Description Card with CID tag & Posted Date */}
           <div className="glass-panel p-6 sm:p-8 border-slate-200 bg-white hard-shadow space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h2 className="font-headline text-lg font-bold text-slate-900 flex items-center gap-2">
@@ -196,9 +531,20 @@ export const JobDetail: React.FC = () => {
               </span>
             </div>
 
-            <p className="text-sm text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-200">
-              {job.description}
-            </p>
+            {/* Prominent Posted Date Banner */}
+            <div className="flex flex-wrap items-center justify-between text-xs font-mono text-slate-600 bg-purple-50/60 p-3 rounded-xl border border-purple-100 gap-2">
+              <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                <Calendar size={14} className="text-purple-600" />
+                <span>Posted Date: {new Date(job.createdAt || Date.now()).toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>
+              </div>
+              <span className="text-purple-800 font-bold bg-white px-2.5 py-0.5 rounded-full border border-purple-200 shadow-2xs">
+                {formatTimeAgo(job.createdAt || Date.now())}
+              </span>
+            </div>
+
+            <div className="bg-slate-50/80 p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
+              <FormattedJobDescription description={job.description} />
+            </div>
           </div>
 
           {/* STATUS-DRIVEN CONTENT PANELS */}
@@ -208,131 +554,278 @@ export const JobDetail: React.FC = () => {
             <div className="space-y-6">
               {isClient ? (
                 <ApplicantTable
+                  jobId={job.id}
+                  jobAmount={job.amountUsdc}
+                  jobReviewPeriodDays={job.reviewPeriodDays}
                   applications={job.applications}
                   category={job.category}
-                  onSelect={(freelancerAddr) => selectFreelancer(job.id, freelancerAddr)}
+                  onSelect={async (freelancerAddr) => {
+                    await selectFreelancer(job.id, freelancerAddr);
+                    navigate(`/workspace?jobId=${job.id}`);
+                  }}
                   isClient={true}
                 />
-              ) : currentRole === 'client' || currentRole === 'judge' || currentRole === 'admin' ? (
-                <div className="glass-panel p-6 border-slate-200 bg-white hard-shadow text-center">
-                  <Shield className="w-10 h-10 text-purple-700 mx-auto mb-3" />
-                  <h4 className="text-sm font-bold text-slate-900">Role Restriction</h4>
-                  <p className="text-xs text-slate-500 mt-1 font-mono">
-                    You are connected as a {currentRole === 'client' ? 'Client' : currentRole === 'judge' ? 'Judge' : 'Admin'}. Only Freelancer accounts can submit proposals to this job.
-                  </p>
-                </div>
               ) : (
-                <div className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-headline text-lg font-bold text-slate-900">
-                        Submit Proposal
-                      </h3>
-                      <p className="text-xs text-slate-600">
-                        Submit your proposal with verified GitHub skill score breakdown
-                      </p>
-                    </div>
+                <div className="space-y-4">
+                  {/* Status Banner */}
+                  <div className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <h3 className="font-headline text-lg font-bold text-slate-900">
+                          {hasApplied ? 'Proposal Submitted & Under Review' : 'Submit Proposal'}
+                        </h3>
+                        <p className="text-xs text-slate-600">
+                          {hasApplied 
+                            ? 'Your proposal is active. You can discuss deliverables and terms directly with the client below.'
+                            : 'Submit your proposal with verified GitHub skill score breakdown'}
+                        </p>
+                      </div>
 
-                    {!isConnected ? (
-                      <button onClick={connectWallet} className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold">
-                        Connect Wallet to Apply
-                      </button>
-                    ) : hasApplied ? (
-                      <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5">
-                        <CheckCircle2 size={14} /> Proposal Submitted
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => setIsApplyingModalOpen(true)}
-                        className="gradient-btn-emerald px-6 py-3 rounded-xl text-xs font-bold flex items-center gap-2 shadow-md"
-                      >
-                        <Send size={15} /> Apply for this Job
-                      </button>
-                    )}
+                      {!isConnected ? (
+                        <button onClick={connectWallet} className="gradient-btn-primary px-4 py-2 rounded-xl text-xs font-bold">
+                          Connect Wallet to Apply
+                        </button>
+                      ) : !isUserVerified ? (
+                        <div className="flex flex-col sm:flex-row items-center gap-3">
+                          <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3.5 py-2.5 rounded-xl font-semibold flex items-center gap-1.5 shadow-2xs">
+                            <AlertTriangle size={15} className="text-amber-600 shrink-0" /> GitHub verification required to apply for jobs
+                          </span>
+                          <Link
+                            to="/profile"
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all shrink-0"
+                          >
+                            <Github size={15} /> Verify GitHub Account
+                          </Link>
+                        </div>
+                      ) : hasApplied ? (
+                        <div className="flex items-center gap-2">
+                          <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5">
+                            <CheckCircle2 size={14} /> Proposal Active
+                          </span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setIsApplyingModalOpen(true)}
+                          className="gradient-btn-emerald px-6 py-3 rounded-xl text-xs font-bold flex items-center gap-2 shadow-md"
+                        >
+                          <Send size={15} /> Apply for this Job
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Pre-Acceptance Direct Negotiation with Client (Redirect to Messages) */}
+                  {hasApplied && (
+                    <div className="bg-white border border-purple-200/80 rounded-2xl p-5 space-y-3 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <MessageSquare size={16} className="text-purple-700" />
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Discuss Terms & Scope in Messages
+                          </h4>
+                        </div>
+                        <p className="text-xs text-slate-500 font-mono">
+                          Communicate with the client in real-time to adjust deliverables, proposal scope, and deadlines.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/chat?jobId=${job.id}`)}
+                        className="gradient-btn-primary px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shrink-0 cursor-pointer"
+                      >
+                        <MessageSquare size={14} />
+                        <span>Open Messages</span>
+                        <ArrowUpRight size={14} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Candidate Overview Table for Freelancers */}
+                  {(job.applications || []).length > 0 && (
+                    <div className="pt-2">
+                      <ApplicantTable
+                        jobId={job.id}
+                        jobAmount={job.amountUsdc}
+                        jobReviewPeriodDays={job.reviewPeriodDays}
+                        applications={job.applications}
+                        category={job.category}
+                        onSelect={() => {}}
+                        isClient={false}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
 
-          {/* 2. STATUS: SELECTED (XMTP Panel) */}
+          {/* 2. STATUS: SELECTED (Proposal Acceptance & Agreement Workspace) */}
           {job.status === 'Selected' && (
             isParty ? (
-              <div className="glass-panel p-6 border-purple-200 bg-white hard-shadow space-y-6">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <div>
-                    <h3 className="font-headline text-lg font-bold text-slate-900 flex items-center gap-2">
-                      <MessageSquare size={18} className="text-purple-700" /> XMTP Encrypted Negotiation Panel
-                    </h3>
-                    <p className="text-xs text-slate-600">
-                      Freelancer selected: <span className="text-purple-900 font-bold">{freelancerDisplayName}</span> <span className="font-mono text-[10px] text-slate-500">({truncateAddress(job.freelancer)})</span>
-                    </p>
-                  </div>
-                  <span className="text-[10px] font-mono text-purple-800 bg-purple-50 px-2.5 py-1 rounded-full border border-purple-200 font-bold">
-                    End-to-End Encrypted
-                  </span>
-                </div>
-
-                <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200 max-h-60 overflow-y-auto font-mono text-xs">
-                  {chatMessages.map((msg, idx) => (
-                    <div
-                      key={idx}
-                      className={`p-3 rounded-lg max-w-lg ${msg.sender === 'Client' ? 'bg-purple-100 border border-purple-200 text-purple-950 ml-auto' : 'bg-white border border-slate-200 text-slate-800'
-                        }`}
-                    >
-                      <div className="font-bold text-[10px] text-slate-500 mb-1">{msg.sender}</div>
-                      <div>{msg.text}</div>
+              <div className="space-y-6">
+                {/* Dedicated Freelancer Acceptance Banner */}
+                {isFreelancer && (
+                  <div className="glass-panel p-6 sm:p-8 border-purple-300 bg-gradient-to-br from-purple-50 via-white to-indigo-50 hard-shadow space-y-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-purple-100 pb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-2xl bg-purple-600 text-white flex items-center justify-center font-bold shadow-md">
+                          <Sparkles size={24} />
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-mono uppercase text-purple-800 font-bold bg-purple-100 px-2 py-0.5 rounded border border-purple-200">
+                            ACTION REQUIRED • PROPOSAL ACCEPTED
+                          </span>
+                          <h3 className="font-headline text-xl font-extrabold text-slate-900 mt-1">
+                            🎉 Congratulations! The client selected your proposal
+                          </h3>
+                        </div>
+                      </div>
+                      <span className="text-xs font-mono font-bold px-3 py-1 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full flex items-center gap-1">
+                        <CheckCircle2 size={14} /> Selected Candidate
+                      </span>
                     </div>
-                  ))}
-                </div>
 
-                <form onSubmit={handleSendMessage} className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Type message to agree on terms..."
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    className="w-full glass-input text-xs"
-                  />
-                  <button type="submit" className="gradient-btn-primary px-4 rounded-xl text-xs font-bold">
-                    Send
-                  </button>
-                </form>
+                    {/* Proposal & Scope Summary */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+                      <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-2xs space-y-1">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Escrow Payout</span>
+                        <span className="text-lg font-black text-emerald-700">${parseFloat(job.amountUsdc || '0').toLocaleString()} USDC</span>
+                        <span className="text-[10px] text-slate-500 block">({job.amountEth || '...'} {job.paymentTokenSymbol || 'MATIC'})</span>
+                      </div>
+                      <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-2xs space-y-1">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Review Window SLA</span>
+                        <span className="text-lg font-black text-purple-900">{job.reviewPeriodDays || 7} Days</span>
+                        <span className="text-[10px] text-slate-500 block">Auto-release after submission</span>
+                      </div>
+                      <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-2xs space-y-1">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Agreement Terms</span>
+                        <span className="text-base font-bold text-slate-800 flex items-center gap-1">
+                          {job.freelancerAgreedTerms ? (
+                            <span className="text-emerald-700 flex items-center gap-1 font-black">
+                              <CheckCircle2 size={16} /> Terms Accepted
+                            </span>
+                          ) : (
+                            <span className="text-amber-700 flex items-center gap-1 font-bold">
+                              <Clock size={16} /> Acceptance Pending
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-[10px] text-slate-500 block">
+                          Client: {job.clientAgreedTerms ? '✓ Agreed' : 'Pending'}
+                        </span>
+                      </div>
+                    </div>
 
-                <div className="pt-4 border-t border-slate-100 space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
-                    <div>
-                      <h4 className="font-headline font-bold text-slate-900">Milestone Terms Hash Status</h4>
-                      <p className="text-slate-600">
-                        Client Agreed: {job.clientAgreedTerms ? '✓ Yes' : 'Pending'} | Freelancer Agreed: {job.freelancerAgreedTerms ? '✓ Yes' : 'Pending'}
+                    {/* Accepted Proposal Text Preview */}
+                    {(() => {
+                      const selApp = (job.applications || []).find((a) => a.applicant.toLowerCase() === address.toLowerCase());
+                      return selApp?.proposalText ? (
+                        <div className="bg-white/80 p-4 rounded-xl border border-purple-100 text-xs space-y-1">
+                          <span className="text-[10px] font-mono font-bold text-purple-900 uppercase">Your Accepted Proposal</span>
+                          <p className="text-slate-700 italic">"{selApp.proposalText}"</p>
+                        </div>
+                      ) : null;
+                    })()}
+
+                    {/* Acceptance Action CTA */}
+                    <div className="pt-2 flex flex-wrap items-center justify-between gap-4 border-t border-purple-100">
+                      <p className="text-xs text-slate-600 max-w-md">
+                        {job.freelancerAgreedTerms
+                          ? '✓ You have accepted the assignment terms. Once the client funds the on-chain escrow, work can begin!'
+                          : 'Review the project requirements and click below to finalize the milestone terms on-chain.'}
                       </p>
+
+                      {!job.freelancerAgreedTerms ? (
+                        <button
+                          onClick={() => handleProposeTermsAction(job.id, address || '')}
+                          className="gradient-btn-emerald px-6 py-3 rounded-xl font-bold text-xs shadow-md flex items-center gap-2 cursor-pointer animate-pulse"
+                        >
+                          <CheckCircle2 size={16} />
+                          Accept Assignment & Agree to Terms
+                        </button>
+                      ) : (
+                        <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 font-mono">
+                          <CheckCircle2 size={16} /> Terms Agreed & Finalized
+                        </span>
+                      )}
                     </div>
-
-                    {isParty && (
-                      <button
-                        onClick={() => proposeTerms(job.id, address)}
-                        className="bg-purple-100 hover:bg-purple-200 border border-purple-300 text-purple-900 px-4 py-2 rounded-xl text-xs font-bold"
-                      >
-                        Propose Terms Hash
-                      </button>
-                    )}
                   </div>
+                )}
 
-                  {isClient && (
-                    <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex items-center justify-between">
+                {/* Client Selection Status Banner */}
+                {isClient && (
+                  <div className="glass-panel p-6 border-purple-200 bg-white hard-shadow space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
                       <div>
-                        <h4 className="font-headline text-sm font-bold text-emerald-900">Ready to Fund Escrow</h4>
-                        <p className="text-xs text-slate-600">Deposit ${job.amountUsdc} USDC into JobEscrow clone</p>
+                        <span className="text-[10px] font-mono uppercase text-purple-800 font-bold bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                          HIRING PIPELINE
+                        </span>
+                        <h3 className="font-headline text-lg font-bold text-slate-900 mt-1">
+                          Freelancer Selected: <span className="text-purple-900 font-black">{freelancerDisplayName}</span>
+                        </h3>
+                        <p className="text-xs text-slate-500 font-mono mt-0.5">
+                          Address: {truncateAddress(job.freelancer)}
+                        </p>
                       </div>
 
-                      <button
-                        onClick={() => fundJob(job.id)}
-                        className="gradient-btn-emerald px-6 py-2.5 rounded-xl font-bold text-xs shadow-md flex items-center gap-1.5"
-                      >
-                        <DollarSign size={16} /> Fund Escrow Contract
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono px-3 py-1 rounded-full font-bold bg-purple-100 text-purple-900 border border-purple-200">
+                          Freelancer Status: {job.freelancerAgreedTerms ? '✓ Agreed Terms' : 'Pending Acceptance'}
+                        </span>
+                      </div>
                     </div>
-                  )}
+
+                    <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
+                      <div className="space-y-1">
+                        <h4 className="font-headline text-sm font-bold text-slate-900">Next Step: Fund Escrow Deposit</h4>
+                        <p className="text-xs text-slate-600">
+                          Lock ${job.amountUsdc} USDC in the smart contract escrow to start the project.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {!job.clientAgreedTerms && (
+                          <button
+                            onClick={() => handleProposeTermsAction(job.id, address || '')}
+                            className="bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <CheckCircle2 size={15} /> Propose Terms Hash
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleFundJobAction(job.id)}
+                          className="gradient-btn-emerald px-6 py-2.5 rounded-xl font-bold text-xs shadow-md flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <DollarSign size={16} /> Fund Escrow Contract
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Direct Messages & Terms Negotiation Hub Card */}
+                <div className="glass-panel p-6 border-purple-200 bg-white hard-shadow flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare size={18} className="text-purple-700" />
+                      <h3 className="font-headline text-base font-bold text-slate-900">
+                        Encrypted Negotiation & Communication Hub
+                      </h3>
+                    </div>
+                    <p className="text-xs text-slate-600">
+                      Communicate directly in the Messages section to discuss milestones, scope adjustments, and time extensions.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/chat?jobId=${job.id}`)}
+                    className="gradient-btn-primary px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shrink-0 cursor-pointer"
+                  >
+                    <MessageSquare size={14} />
+                    <span>Open Messages</span>
+                    <ArrowUpRight size={14} />
+                  </button>
                 </div>
               </div>
             ) : (
@@ -347,7 +840,7 @@ export const JobDetail: React.FC = () => {
           )}
 
           {/* DELIVERABLE SUBMISSION, WORK STATUS, EXTENSIONS & CLIENT APPROVAL WORKSPACE */}
-          {(job.status === 'Selected' || job.status === 'Submitted' || job.status === 'Disputed' || job.status === 'Completed') && (
+          {(job.status === 'Funded' || job.status === 'Submitted' || job.status === 'Disputed' || job.status === 'Completed') && (
             <DeliverableWorkSubmissionPanel job={job} />
           )}
 
@@ -408,7 +901,7 @@ export const JobDetail: React.FC = () => {
                     <p className="font-bold text-slate-400 text-xs">None (No SBT for 0% Payout)</p>
                   ) : (
                     <p className="font-bold text-purple-700 text-sm flex items-center gap-1">
-                      <Award size={14} /> Token #{Math.floor(Math.random() * 9000 + 1000)}
+                      <Award size={14} /> Token #{job.sbtTokenId || getDeterministicSbtId(job.id)}
                     </p>
                   )}
                 </div>
@@ -439,11 +932,26 @@ export const JobDetail: React.FC = () => {
 
         {/* Right Column Sidebar matching job_detail_status_open/code.html */}
         <aside className="col-span-12 lg:col-span-4 space-y-6">
-          {/* Budget Card */}
-          <div className="glass-panel p-6 border-purple-200 bg-white hard-shadow space-y-4">
-            <h3 className="font-label-mono text-xs text-slate-500 uppercase tracking-wider font-bold">
-              Job Escrow Budget
-            </h3>
+          {/* Budget & Escrow Platform Maintenance Fee Breakdown Card */}
+          <div className="glass-panel p-6 border-purple-200 bg-white hard-shadow space-y-4 font-sans">
+            {/* Header matching requested visual design */}
+            <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2.5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-purple-50/90 border border-purple-100 flex items-center justify-center text-purple-600 shrink-0 shadow-2xs">
+                  <Wallet size={22} className="text-purple-600 stroke-[2.2]" />
+                </div>
+                <div className="font-mono text-xs font-black tracking-wider text-slate-900 leading-tight uppercase">
+                  <div>JOB ESCROW</div>
+                  <div>BUDGET</div>
+                </div>
+              </div>
+
+              <div className="px-3 py-1.5 rounded-full bg-purple-50/70 border border-purple-200 text-purple-900 font-mono text-[11px] font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-2xs">
+                <ShieldCheck size={13} className="text-purple-600 shrink-0 stroke-[2.5]" />
+                <span>0% Commission • 2.5% Maint. Fee</span>
+              </div>
+            </div>
+
             <div className="space-y-1">
               <div className="flex items-baseline gap-2">
                 <span className="font-headline text-3xl font-extrabold text-slate-900">
@@ -457,6 +965,43 @@ export const JobDetail: React.FC = () => {
                 </span>
               )}
             </div>
+
+            {/* Maintenance Fee & Net Payout Breakdown */}
+            {(() => {
+              const gross = parseFloat(job.amountUsdc || '0');
+              const maintenanceFee = gross * 0.025;
+              const netPayout = gross - maintenanceFee;
+              const isMeFreelancer = job.freelancer?.toLowerCase() === (address || '').toLowerCase() || currentRole === 'freelancer';
+              const isMeClient = job.client.toLowerCase() === (address || '').toLowerCase() || currentRole === 'client';
+
+              return (
+                <div className="space-y-2.5 pt-2 border-t border-slate-100 text-xs font-mono">
+                  <div className="flex justify-between items-center text-slate-600">
+                    <span>Gross Escrow Deposit:</span>
+                    <span className="font-bold text-slate-900">${gross.toFixed(2)} USDC</span>
+                  </div>
+
+                  <div className="flex justify-between items-center text-slate-500">
+                    <span className="flex items-center gap-1">
+                      <span>Platform Maintenance Fee (2.5%):</span>
+                    </span>
+                    <span className="font-bold text-rose-600">-${maintenanceFee.toFixed(2)} USDC</span>
+                  </div>
+
+                  <div className="flex justify-between items-center p-2.5 rounded-xl bg-purple-50/80 border border-purple-200 text-purple-950 font-bold">
+                    <span>{isMeFreelancer ? 'Your Net Payout:' : 'Developer Net Payout:'}</span>
+                    <span className="text-emerald-700 text-sm font-black">${netPayout.toFixed(2)} USDC</span>
+                  </div>
+
+                  <p className="text-[10px] font-sans text-slate-500 leading-relaxed bg-slate-50 p-2 rounded-lg border border-slate-200/80">
+                    {isMeClient
+                      ? '💡 0% Commission — 2.5% platform maintenance fee is deducted upon payout release and routed to the decentralized DAO treasury.'
+                      : '💡 0% Commission — Net amount received after 2.5% platform maintenance fee.'}
+                  </p>
+                </div>
+              );
+            })()}
+
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2.5 text-xs text-emerald-800 font-mono font-bold">
               <Shield size={16} />
               <span>Escrow Fully Secured</span>
@@ -475,7 +1020,7 @@ export const JobDetail: React.FC = () => {
             const clientJobs = jobs.filter(j => j.client.toLowerCase() === job.client.toLowerCase());
             const totalOffered = clientJobs.length;
             const completedJobsCount = clientJobs.filter(j => j.status === 'Completed').length;
-            const disputedJobsCount = clientJobs.filter(j => j.status === 'Disputed' || j.events.some(e => e.step === 'Disputed')).length;
+            const disputedJobsCount = clientJobs.filter(j => j.status === 'Disputed' || (j.events || []).some(e => e.step === 'Disputed')).length;
 
             const totalSpentUsdc = clientJobs
               .filter(j => j.status === 'Completed')
@@ -510,8 +1055,8 @@ export const JobDetail: React.FC = () => {
             const releaseSpeeds = clientJobs
               .filter(j => j.status === 'Completed')
               .map(j => {
-                const postedEvent = j.events.find(e => e.step === 'Posted');
-                const completedEvent = j.events.find(e => e.step === 'Completed');
+                const postedEvent = (j.events || []).find(e => e.step === 'Posted');
+                const completedEvent = (j.events || []).find(e => e.step === 'Completed');
                 if (postedEvent && completedEvent && completedEvent.timestamp > 0 && postedEvent.timestamp > 0) {
                   return (completedEvent.timestamp - postedEvent.timestamp) / 3600000;
                 }
@@ -525,9 +1070,9 @@ export const JobDetail: React.FC = () => {
               speedSub = 'Average time from job publication to complete milestone payout release.';
             }
 
-            const isMultisig = job.client.toLowerCase() === (import.meta.env.VITE_ADMIN_ADDRESS_1 || '0x62cdfc0692cc675c95304bace2c834d8f901dcba').toLowerCase() ||
-                               job.client.toLowerCase() === (import.meta.env.VITE_ADMIN_ADDRESS_2 || '0x25f6c8ed995c811e6c0adb1d66a60830e8115e9a').toLowerCase() ||
-                               job.client.toLowerCase() === '0xb30f2efbcebc529d946e05c9cce0f1fffb7e1ab1';
+            const isMultisig = job.client.toLowerCase() === (import.meta.env.VITE_ADMIN_ADDRESS_1 || '').toLowerCase() ||
+                               job.client.toLowerCase() === (import.meta.env.VITE_ADMIN_ADDRESS_2 || '').toLowerCase() ||
+                               job.client.toLowerCase() === (import.meta.env.VITE_ADMIN_ADDRESS_3 || '').toLowerCase();
 
             return (
               <div className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-5">

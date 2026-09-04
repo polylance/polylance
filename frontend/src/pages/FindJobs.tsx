@@ -4,9 +4,12 @@ import { motion } from 'framer-motion';
 import { useWeb3 } from '../context/Web3Context';
 import { usePolyLanceData } from '../context/PolyLanceDataContext';
 import { SkillCategory } from '../types';
-import { Search, Filter, Briefcase, ArrowRight, ShieldCheck, Award, CheckCircle2, Globe } from 'lucide-react';
+import { Search, Filter, Briefcase, ArrowRight, ShieldCheck, Award, CheckCircle2, Globe, Clock } from 'lucide-react';
 import { SUPPORTED_FIAT, convertCryptoToFiat } from '../utils/currency';
+import { truncateAddress, formatTimeAgo } from '../utils/formatters';
+import { getJobInactivityStatus } from '../utils/inactivity';
 import { staggerContainer, staggerItem, scrollReveal, transition } from '../lib/motion';
+import { NoSearchResultState } from '../components/UIStates';
 
 export const FindJobs: React.FC = () => {
   const { currentRole } = useWeb3();
@@ -26,12 +29,15 @@ export const FindJobs: React.FC = () => {
     { id: 'mobile', label: 'Mobile Apps', sub: 'Swift, Kotlin, Dart' },
   ];
 
+  // Only active Open jobs that have not expired (> 14 days client inactivity) are listed on Find Jobs marketplace.
   const filteredJobs = jobs.filter((job) => {
+    const statusInfo = getJobInactivityStatus(job);
+    const isOpen = job.status === 'Open' && !statusInfo.isExpired;
     const matchesCategory = selectedCategory === 'all' || job.category === selectedCategory;
     const matchesSearch =
       job.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       job.description.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
+    return isOpen && matchesCategory && matchesSearch;
   });
 
   return (
@@ -54,8 +60,8 @@ export const FindJobs: React.FC = () => {
           </p>
         </div>
 
-        {/* ONLY SHOW POST A JOB BUTTON IF USER IS IN CLIENT ROLE */}
-        {isClientRole && (
+        {/* Post a Job Button for Clients, Judges, and Admins only */}
+        {(currentRole === 'client' || currentRole === 'judge' || currentRole === 'admin') && (
           <Link
             to="/jobs/post"
             className="gradient-btn-primary px-5 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow self-start md:self-auto"
@@ -65,6 +71,7 @@ export const FindJobs: React.FC = () => {
           </Link>
         )}
       </div>
+
 
       {/* Filter Tabs & Search Bar */}
       <div className="space-y-4">
@@ -107,11 +114,10 @@ export const FindJobs: React.FC = () => {
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`px-4 py-2 rounded-xl text-xs font-medium border whitespace-nowrap transition-all text-left cursor-pointer ${
-                  isSelected
+                className={`px-4 py-2 rounded-xl text-xs font-medium border whitespace-nowrap transition-all text-left cursor-pointer ${isSelected
                     ? 'bg-purple-100 border-purple-300 text-purple-950 font-bold shadow-xs'
                     : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
-                }`}
+                  }`}
               >
                 <div className="font-bold">{cat.label}</div>
                 <div className="text-[10px] text-slate-500 font-mono">{cat.sub}</div>
@@ -129,10 +135,15 @@ export const FindJobs: React.FC = () => {
         className="grid grid-cols-1 md:grid-cols-2 gap-6"
       >
         {filteredJobs.length === 0 ? (
-          <div className="col-span-2 glass-panel p-12 text-center border-slate-200 bg-white space-y-2">
-            <Filter className="w-10 h-10 text-slate-400 mx-auto" />
-            <h3 className="text-base font-bold text-slate-700">No jobs match your filter</h3>
-            <p className="text-xs text-slate-500">Try selecting another category or resetting search query.</p>
+          <div className="col-span-2 py-6">
+            <NoSearchResultState
+              title={searchQuery ? 'No matching jobs found' : 'No jobs in this category'}
+              description={searchQuery ? `We couldn't find any opportunities matching "${searchQuery}". Try a different keyword or clear your filters.` : 'No active escrow jobs in this skill category right now. Check back soon or browse other categories.'}
+              onClear={() => {
+                setSelectedCategory('all');
+                setSearchQuery('');
+              }}
+            />
           </div>
         ) : (
           filteredJobs.map((job) => {
@@ -146,66 +157,74 @@ export const FindJobs: React.FC = () => {
                 onClick={() => navigate(`/jobs/${job.id}`)}
                 className="glass-panel p-6 border-slate-200 hover:border-purple-300 bg-white flex flex-col justify-between space-y-4 group transition-all hard-shadow cursor-pointer premium-card"
               >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-900 bg-purple-50 px-2.5 py-1 rounded border border-purple-200">
-                    {job.category}
-                  </span>
-                  <span className={`badge-status badge-${job.status.toLowerCase()}`}>
-                    {job.status}
-                  </span>
-                </div>
-
-                <div>
-                  <h3
-                    className="text-lg font-bold text-slate-900 group-hover:text-purple-700 font-heading transition-colors line-clamp-1"
-                  >
-                    {job.title}
-                  </h3>
-                  <p className="text-xs text-slate-600 line-clamp-2 mt-1.5 leading-relaxed">
-                    {job.description}
-                  </p>
-                </div>
-
-                {/* Credential First Badges matching reference HTML */}
-                <div className="flex flex-wrap items-center gap-2 pt-1 font-mono text-[11px]">
-                  <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded font-bold flex items-center gap-1">
-                    <CheckCircle2 size={12} /> Verified Client
-                  </span>
-                  <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded font-bold flex items-center gap-1">
-                    <Award size={12} className="text-purple-700" /> Req Score &gt; 700
-                  </span>
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs">
-                <div className="space-y-0.5">
-                  <span className="text-[10px] uppercase font-mono text-slate-500 font-bold block">Budget / Escrow</span>
-                  <div className="font-mono text-slate-800 font-extrabold text-sm flex flex-col">
-                    <span className="text-emerald-700">
-                      {parseFloat(payAmount).toLocaleString(undefined, { maximumFractionDigits: 6 })} <span className="text-xs font-normal text-slate-500">{payToken}</span>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-900 bg-purple-50 px-2.5 py-1 rounded border border-purple-200">
+                      {job.category}
                     </span>
-                    <span className="text-[10px] text-purple-600 font-bold font-sans mt-0.5 whitespace-nowrap block">
-                      ≈ {converted.formatted}
+                    <span className={`badge-status badge-${job.status.toLowerCase()}`}>
+                      {job.status}
+                    </span>
+                  </div>
+
+                  <div>
+                    <h3
+                      className="text-lg font-bold text-slate-900 group-hover:text-purple-700 font-heading transition-colors line-clamp-1"
+                    >
+                      {job.title}
+                    </h3>
+                    <p className="text-xs text-slate-600 line-clamp-2 mt-1.5 leading-relaxed">
+                      {job.description}
+                    </p>
+                  </div>
+
+                  {/* Credential First Badges matching reference HTML */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1 font-mono text-[11px]">
+                    <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                      <CheckCircle2 size={12} /> Verified Client
+                    </span>
+                    <span className="bg-purple-50 text-purple-800 border border-purple-200 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                      <Clock size={11} className="text-purple-600" /> Posted {formatTimeAgo(job.createdAt || Date.now())}
+                    </span>
+                    {getJobInactivityStatus(job).isReminderActive && (
+                      <span className="bg-amber-50 text-amber-900 border border-amber-300 px-2 py-0.5 rounded font-bold flex items-center gap-1 animate-pulse">
+                        ⚠️ Inactive (10+ Days) • Closes in {getJobInactivityStatus(job).daysRemaining}d
+                      </span>
+                    )}
+                    <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                      <Award size={12} className="text-purple-700" /> Req Score &gt; 700
                     </span>
                   </div>
                 </div>
 
-                <div className="text-right space-y-0.5">
-                  <span className="text-[10px] uppercase font-mono text-slate-500 font-bold block">Applicants</span>
-                  <span className="font-mono text-slate-700 font-bold">{job.applications.length} submitted</span>
-                </div>
+                <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] uppercase font-mono text-slate-500 font-bold block">Budget / Escrow</span>
+                    <div className="font-mono text-slate-800 font-extrabold text-sm flex flex-col">
+                      <span className="text-emerald-700">
+                        {parseFloat(payAmount).toLocaleString(undefined, { maximumFractionDigits: 6 })} <span className="text-xs font-normal text-slate-500">{payToken}</span>
+                      </span>
+                      <span className="text-[10px] text-purple-700 font-bold font-sans mt-0.5 whitespace-nowrap block">
+                        Net: ${(parseFloat(payAmount) * 0.975).toFixed(2)} USDC (2.5% platform maintenance fee)
+                      </span>
+                    </div>
+                  </div>
 
-                <div
-                  className="p-2.5 rounded-xl bg-purple-50 group-hover:bg-purple-600 text-purple-900 group-hover:text-white transition-all shadow-xs"
-                >
-                  <ArrowRight size={16} />
+                  <div className="text-right space-y-0.5">
+                    <span className="text-[10px] uppercase font-mono text-slate-500 font-bold block">Applicants</span>
+                    <span className="font-mono text-slate-700 font-bold">{job.applications.length} submitted</span>
+                  </div>
+
+                  <div
+                    className="p-2.5 rounded-xl bg-purple-50 group-hover:bg-purple-600 text-purple-900 group-hover:text-white transition-all shadow-xs"
+                  >
+                    <ArrowRight size={16} />
+                  </div>
                 </div>
-              </div>
-            </motion.div>
-          );
-        })
-      )}
+              </motion.div>
+            );
+          })
+        )}
       </motion.div>
     </motion.div>
   );

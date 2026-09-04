@@ -13,21 +13,21 @@ export const appleEase: [number, number, number, number] = [0.22, 1, 0.36, 1];
 // DURATIONS
 // ─────────────────────────────────────────────────────────────────
 export const duration = {
-  micro:   0.18,  // icon swaps, checkbox ticks
-  fast:    0.22,  // hover states, small badge changes
-  normal:  0.32,  // section transitions, tab changes
-  medium:  0.38,  // page transitions, dropdowns
-  slow:    0.55,  // card reveals, scroll-in sections
-  xslow:   0.80,  // number count-ups, progress bars
+  micro:   0.10,  // icon swaps, checkbox ticks
+  fast:    0.14,  // hover states, small badge changes
+  normal:  0.18,  // section transitions, tab changes
+  medium:  0.22,  // page transitions, dropdowns
+  slow:    0.35,  // card reveals, scroll-in sections
+  xslow:   0.50,  // number count-ups, progress bars
 } as const;
 
 // ─────────────────────────────────────────────────────────────────
 // SPRING CONFIG — physical, bouncy-but-controlled
 // ─────────────────────────────────────────────────────────────────
 export const spring = {
-  default: { type: 'spring' as const, stiffness: 420, damping: 32 },
-  snappy:  { type: 'spring' as const, stiffness: 500, damping: 36 },
-  gentle:  { type: 'spring' as const, stiffness: 280, damping: 28 },
+  default: { type: 'spring' as const, stiffness: 450, damping: 35 },
+  snappy:  { type: 'spring' as const, stiffness: 520, damping: 38 },
+  gentle:  { type: 'spring' as const, stiffness: 300, damping: 30 },
 };
 
 // ─────────────────────────────────────────────────────────────────
@@ -45,26 +45,20 @@ export const transition = {
 } as const;
 
 // ─────────────────────────────────────────────────────────────────
-// PAGE TRANSITION — fade + slide + blur (Apple-style route change)
+// PAGE TRANSITION — fluid GPU fade + slide (Butter smooth 60fps)
 // ─────────────────────────────────────────────────────────────────
 export const pageVariants = {
   initial: {
     opacity: 0,
-    x: 18,
-    scale: 0.985,
-    filter: 'blur(10px)',
+    y: 4,
   },
   animate: {
     opacity: 1,
-    x: 0,
-    scale: 1,
-    filter: 'blur(0px)',
+    y: 0,
   },
   exit: {
     opacity: 0,
-    x: -12,
-    scale: 0.99,
-    filter: 'blur(8px)',
+    y: -4,
   },
 } as const;
 
@@ -72,19 +66,19 @@ export const pageVariants = {
 // SECTION TRANSITION — switching content within same page
 // ─────────────────────────────────────────────────────────────────
 export const sectionVariants = {
-  initial: { opacity: 0, y: 12, filter: 'blur(8px)' },
-  animate: { opacity: 1, y: 0,  filter: 'blur(0px)' },
-  exit:    { opacity: 0, y: -8, filter: 'blur(4px)' },
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit:    { opacity: 0, y: -6 },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────
 // SCROLL REVEAL — section entering the viewport
 // ─────────────────────────────────────────────────────────────────
 export const scrollReveal = {
-  initial: { opacity: 0, y: 20, filter: 'blur(6px)' },
-  whileInView: { opacity: 1, y: 0, filter: 'blur(0px)' },
-  viewport: { once: true, amount: 0.18 },
-  transition: { duration: duration.slow, ease: appleEase },
+  initial: { opacity: 0, y: 16 },
+  whileInView: { opacity: 1, y: 0 },
+  viewport: { once: true, amount: 0.12 },
+  transition: { duration: duration.normal, ease: appleEase },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────
@@ -93,31 +87,30 @@ export const scrollReveal = {
 export const staggerContainer = {
   hidden: {},
   show: {
-    transition: { staggerChildren: 0.07 },
+    transition: { staggerChildren: 0.05 },
   },
 } as const;
 
 export const staggerItem = {
-  hidden: { opacity: 0, y: 14, filter: 'blur(5px)' },
+  hidden: { opacity: 0, y: 10 },
   show: {
     opacity: 1,
     y: 0,
-    filter: 'blur(0px)',
-    transition: { duration: duration.slow, ease: appleEase },
+    transition: { duration: duration.normal, ease: appleEase },
   },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────
-// DROPDOWN — fast blur-fade scale-in
+// DROPDOWN — fast scale-fade entrance
 // ─────────────────────────────────────────────────────────────────
 export const dropdownVariants = {
-  initial: { opacity: 0, y: -6, scale: 0.98, filter: 'blur(4px)' },
-  animate: { opacity: 1, y: 0,  scale: 1,    filter: 'blur(0px)' },
-  exit:    { opacity: 0, y: -4, scale: 0.99, filter: 'blur(2px)' },
+  initial: { opacity: 0, y: -4, scale: 0.98 },
+  animate: { opacity: 1, y: 0,  scale: 1 },
+  exit:    { opacity: 0, y: -3, scale: 0.99 },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────
-// MODAL — scale + blur entrance
+// MODAL — crisp scale entrance
 // ─────────────────────────────────────────────────────────────────
 export const modalOverlayVariants = {
   initial: { opacity: 0 },
@@ -126,9 +119,9 @@ export const modalOverlayVariants = {
 } as const;
 
 export const modalContentVariants = {
-  initial: { opacity: 0, scale: 0.96, y: 12, filter: 'blur(8px)' },
-  animate: { opacity: 1, scale: 1,    y: 0,  filter: 'blur(0px)' },
-  exit:    { opacity: 0, scale: 0.97, y: 8,  filter: 'blur(6px)' },
+  initial: { opacity: 0, scale: 0.97, y: 10 },
+  animate: { opacity: 1, scale: 1,    y: 0 },
+  exit:    { opacity: 0, scale: 0.98, y: 6 },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────

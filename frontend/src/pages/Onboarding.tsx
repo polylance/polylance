@@ -6,7 +6,10 @@ import { UserProfile } from '../types';
 import { scoreGithubUser, GithubScoreResult } from '../utils/githubOracle';
 import { generateIpfsCid } from '../utils/ipfs';
 import { generateDeterministicHash } from '../utils/formatters';
+import { isAdminAddress, isJudgeAddress } from '../utils/adminGuard';
 import { ArrowRight, ArrowLeft, X, Sparkles, Loader2, ShieldCheck, Terminal, CheckCircle2 } from 'lucide-react';
+import { PolyLanceAlertModal, AlertModalOptions } from '../components/PolyLanceAlertModal';
+import { SkillSelector } from '../components/SkillSelector';
 
 export const Onboarding: React.FC = () => {
   const { address, currentRole, isConnected, connectWallet } = useWeb3();
@@ -40,6 +43,7 @@ export const Onboarding: React.FC = () => {
   const [githubError, setGithubError] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [mintedTxHash, setMintedTxHash] = useState('');
+  const [alertModalOptions, setAlertModalOptions] = useState<AlertModalOptions | null>(null);
 
   // Sync form state when existing profile or wallet switches
   useEffect(() => {
@@ -72,7 +76,7 @@ export const Onboarding: React.FC = () => {
 
   const handleSimulateGithubSync = async () => {
     if (!githubUsername.trim()) {
-      alert('Please enter your GitHub handle.');
+      setGithubError('Please enter your GitHub handle.');
       return;
     }
     const lowerUsername = githubUsername.toLowerCase().trim();
@@ -84,8 +88,16 @@ export const Onboarding: React.FC = () => {
     );
 
     if (duplicateAddress) {
-      setGithubError(`The GitHub account @${githubUsername.trim()} is already connected to another wallet address (${duplicateAddress.slice(0, 6)}...${duplicateAddress.slice(-4)})! Only one wallet connection per GitHub username is allowed for Sybil resistance. Please link a different GitHub account.`);
-      return;
+      const adminGh = (import.meta.env.VITE_ADMIN_GITHUB_USERNAME || '').toLowerCase().trim();
+      const judgeGh = (import.meta.env.VITE_JUDGE_GITHUB_USERNAME || '').toLowerCase().trim();
+      const isPrivileged =
+        (isAdminAddress(address || '') && adminGh === lowerUsername) ||
+        (isJudgeAddress(address || '') && judgeGh === lowerUsername);
+
+      if (!isPrivileged) {
+        setGithubError(`Security Shield: The GitHub account @${githubUsername.trim()} is already bound to another wallet (${duplicateAddress.slice(0, 6)}...${duplicateAddress.slice(-4)})! Only one wallet connection per GitHub username is permitted for Sybil resistance. Unauthorized reassignment is blocked.`);
+        return;
+      }
     }
 
     setGithubError(null);
@@ -111,11 +123,19 @@ export const Onboarding: React.FC = () => {
   const handleFinalizeOnboarding = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!displayName.trim()) {
-      alert('Please enter a display name.');
+      setAlertModalOptions({
+        title: 'Display Name Required',
+        message: 'Please enter a display name to represent your on-chain talent profile.',
+        type: 'warning',
+      });
       return;
     }
     if (!isClient && githubError) {
-      alert('Cannot finalize profile: Please connect a unique, unused GitHub account.');
+      setAlertModalOptions({
+        title: 'Unique GitHub Required',
+        message: 'Cannot finalize profile: Please connect a unique, unused GitHub account for Sybil resistance.',
+        type: 'error',
+      });
       return;
     }
 
@@ -290,59 +310,34 @@ export const Onboarding: React.FC = () => {
                       {/* Skill Bars with dynamic percentages */}
                       <div className="space-y-3 font-mono text-xs">
                         {(() => {
-                          const totalBytes = (githubResult.languageBytes.Solidity || 0) +
-                            (githubResult.languageBytes.Rust || 0) +
-                            (githubResult.languageBytes.TypeScript || 0) +
-                            (githubResult.languageBytes.Go || 0);
+                          const langEntries = Object.entries(githubResult.languageBytes || {}).filter(([_, bytes]) => bytes > 0);
+                          const totalBytes = langEntries.reduce((sum, [_, b]) => sum + b, 0);
 
-                          const web3Percent = totalBytes > 0 ? Math.round(((githubResult.languageBytes.Solidity || 0) + (githubResult.languageBytes.Rust || 0)) / totalBytes * 100) : 0;
-                          const frontendPercent = totalBytes > 0 ? Math.round((githubResult.languageBytes.TypeScript || 0) / totalBytes * 100) : 0;
-                          const backendPercent = totalBytes > 0 ? Math.round((githubResult.languageBytes.Go || 0) * 0.85 / totalBytes * 100) : 0;
-                          const mobilePercent = totalBytes > 0 ? Math.max(0, 100 - web3Percent - frontendPercent - backendPercent) : 0;
+                          if (langEntries.length === 0 || totalBytes === 0) {
+                            return (
+                              <div className="text-slate-500 py-3 text-center">
+                                Verified GitHub Developer Repository Attestation
+                              </div>
+                            );
+                          }
 
-                          return (
-                            <>
-                              <div>
+                          return langEntries.slice(0, 4).map(([lang, bytes]) => {
+                            const percent = Math.round((bytes / totalBytes) * 100);
+                            return (
+                              <div key={lang}>
                                 <div className="flex justify-between mb-1">
-                                  <span className="text-slate-700 font-medium">Web3 & Smart Contracts</span>
-                                  <span className="text-purple-700 font-bold">{web3Percent}%</span>
+                                  <span className="text-slate-700 font-medium">{lang}</span>
+                                  <span className="text-purple-700 font-bold">{percent}% ({Math.round(bytes / 1024).toLocaleString()}k Bytes)</span>
                                 </div>
                                 <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                                  <div className="h-full bg-gradient-to-r from-purple-600 to-indigo-600" style={{ width: `${web3Percent}%` }} />
+                                  <div 
+                                    className="h-full bg-gradient-to-r from-purple-600 to-indigo-600" 
+                                    style={{ width: `${percent}%` }} 
+                                  />
                                 </div>
                               </div>
-
-                              <div>
-                                <div className="flex justify-between mb-1">
-                                  <span className="text-slate-700 font-medium">Frontend (React/Next)</span>
-                                  <span className="text-purple-700 font-bold">{frontendPercent}%</span>
-                                </div>
-                                <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                                  <div className="h-full bg-gradient-to-r from-indigo-600 to-purple-500" style={{ width: `${frontendPercent}%` }} />
-                                </div>
-                              </div>
-
-                              <div>
-                                <div className="flex justify-between mb-1">
-                                  <span className="text-slate-700 font-medium">Backend Systems</span>
-                                  <span className="text-purple-700 font-bold">{backendPercent}%</span>
-                                </div>
-                                <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                                  <div className="h-full bg-purple-500" style={{ width: `${backendPercent}%` }} />
-                                </div>
-                              </div>
-
-                              <div>
-                                <div className="flex justify-between mb-1">
-                                  <span className="text-slate-700 font-medium">Mobile Apps</span>
-                                  <span className="text-purple-700 font-bold">{mobilePercent}%</span>
-                                </div>
-                                <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                                  <div className="h-full bg-slate-400" style={{ width: `${mobilePercent}%` }} />
-                                </div>
-                              </div>
-                            </>
-                          );
+                            );
+                          });
                         })()}
                       </div>
 
@@ -530,63 +525,18 @@ export const Onboarding: React.FC = () => {
             </div>
 
             <div className="space-y-4">
-              <div>
-                <label className="block font-label-mono text-xs text-slate-700 uppercase tracking-wider mb-2 font-bold text-[11px] tracking-[0.18em]">
-                  Technical Skills & Expertise
-                </label>
-                <div className="flex flex-wrap gap-2 p-3 border border-slate-200 rounded-xl bg-slate-50 min-h-[56px]">
-                  {skills.map((sk) => (
-                    <span
-                      key={sk}
-                      className="bg-purple-100 border border-purple-200 text-purple-900 px-3 py-1 rounded-full text-xs font-mono font-semibold flex items-center gap-1.5"
-                    >
-                      {sk}
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveSkill(sk)}
-                        className="hover:text-rose-600 transition-colors cursor-pointer"
-                      >
-                        <X size={12} />
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    type="text"
-                    placeholder="Add skill and press Enter..."
-                    value={tagInput}
-                    onChange={(e) => setTagInput(e.target.value)}
-                    onKeyDown={(e) => handleAddSkill(e)}
-                    className="flex-grow bg-transparent border-none text-xs text-slate-900 outline-none p-1 font-mono"
-                  />
-                </div>
-              </div>
+              <SkillSelector
+                selectedSkills={skills}
+                onChange={setSkills}
+                label="Technical Skills & Stack Selection"
+                helperText="Browse 26 specialized tech categories or search to configure your exact stack on-chain."
+              />
 
-              {/* Suggested Skills Pills */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                <div className="border border-slate-200 p-4 rounded-xl bg-slate-50">
-                  <h3 className="font-label-mono text-xs text-purple-900 font-bold mb-2 uppercase text-[11px] tracking-[0.18em]">
-                    SUGGESTED SKILLS
-                  </h3>
-                  <div className="flex flex-wrap gap-1.5">
-                    {suggestedSkills.map((sug) => (
-                      <button
-                        key={sug}
-                        type="button"
-                        onClick={(e) => handleAddSkill(e, sug)}
-                        className="text-xs font-mono border border-slate-300 hover:border-purple-500 bg-white px-2.5 py-1 rounded text-slate-700 hover:text-purple-900 font-medium transition-colors cursor-pointer"
-                      >
-                        + {sug}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 bg-purple-50 border border-purple-200 text-purple-950 p-4 rounded-xl text-xs font-medium">
-                  <ShieldCheck size={28} className="text-emerald-600 shrink-0" />
-                  <p className="leading-tight">
-                    These skills will be stored as immutable metadata attributes on your PolyLance Reputation NFT.
-                  </p>
-                </div>
+              <div className="flex items-center gap-3 bg-purple-50/80 border border-purple-200/80 text-purple-950 p-4 rounded-2xl text-xs font-medium shadow-2xs">
+                <ShieldCheck size={26} className="text-emerald-600 shrink-0" />
+                <p className="leading-tight text-slate-700">
+                  These technical skills will be stored as immutable metadata attributes on your PolyLance Reputation NFT and verifiable profile registry.
+                </p>
               </div>
             </div>
 
@@ -642,6 +592,13 @@ export const Onboarding: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modern In-App Notification / Alert Modal */}
+      <PolyLanceAlertModal
+        isOpen={Boolean(alertModalOptions)}
+        options={alertModalOptions}
+        onClose={() => setAlertModalOptions(null)}
+      />
     </div>
   );
 };

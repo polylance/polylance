@@ -3,6 +3,7 @@ import { useWeb3 } from '../context/Web3Context';
 import { usePolyLanceData } from '../context/PolyLanceDataContext';
 import { truncateAddress } from '../utils/formatters';
 import { Gavel, Vote, Plus, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { EmptyState } from '../components/UIStates';
 
 export const Dao: React.FC = () => {
   const { address, isConnected, connectWallet } = useWeb3();
@@ -70,9 +71,19 @@ export const Dao: React.FC = () => {
         </h3>
 
         <div className="space-y-4">
-          {daoProposals.map((prop) => {
-            const totalVotes = prop.votesFor + prop.votesAgainst;
-            const forPercent = totalVotes > 0 ? Math.round((prop.votesFor / totalVotes) * 100) : 50;
+          {daoProposals.length === 0 ? (
+            <div className="py-2">
+              <EmptyState
+                title="No Active Judge Election Proposals"
+                description="There are currently no active arbitrator nomination proposals. Nominate a candidate to initiate decentralized dispute resolution voting."
+                actionText={isConnected ? "Propose Arbitrator Candidate" : "Connect Wallet to Vote"}
+                onAction={isConnected ? () => setIsModalOpen(true) : connectWallet}
+              />
+            </div>
+          ) : (
+            daoProposals.map((prop) => {
+              const totalVotes = prop.votesFor + prop.votesAgainst;
+              const forPercent = totalVotes > 0 ? Math.round((prop.votesFor / totalVotes) * 100) : 50;
 
             return (
               <div key={prop.id} className="glass-panel p-6 border-slate-200 bg-white hard-shadow space-y-4">
@@ -132,7 +143,8 @@ export const Dao: React.FC = () => {
                 )}
               </div>
             );
-          })}
+          })
+        )}
         </div>
       </div>
 

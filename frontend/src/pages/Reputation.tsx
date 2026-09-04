@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useWeb3 } from '../context/Web3Context';
 import { usePolyLanceData } from '../context/PolyLanceDataContext';
+import { UserProfile } from '../types';
 import { 
   Award, 
   ShieldCheck, 
@@ -18,10 +19,13 @@ import {
   Landmark,
   Bookmark,
   Check,
-  Shield
+  Shield,
+  Scale
 } from 'lucide-react';
 import { motion, AnimatePresence, type Variants } from 'framer-motion';
 import { staggerContainer, staggerItem, scrollReveal } from '../lib/motion';
+
+import { calculateReputationScores, formatEarnings } from '../utils/reputation';
 
 export const Reputation: React.FC = () => {
   const { address, isArbitrator, currentRole, reputationCount: onChainReputationCount } = useWeb3();
@@ -36,64 +40,56 @@ export const Reputation: React.FC = () => {
   const userProfileKey = address ? Object.keys(profiles).find(k => k.toLowerCase() === address.toLowerCase()) : null;
   const userProfile = userProfileKey ? profiles[userProfileKey] : null;
 
-  // Compute actual completed freelance jobs count for this user
-  const userCompletedJobs = jobs.filter(
-    (j) => j.freelancer?.toLowerCase() === address?.toLowerCase() && j.status === 'Completed'
+  const judgeAddr = (import.meta.env.VITE_JUDGE_ADDRESS || '').toLowerCase();
+  const adminAddr1 = (import.meta.env.VITE_ADMIN_ADDRESS_1 || '').toLowerCase();
+  const adminAddr2 = (import.meta.env.VITE_ADMIN_ADDRESS_2 || '').toLowerCase();
+  const adminAddr3 = (import.meta.env.VITE_ADMIN_ADDRESS_3 || '').toLowerCase();
+
+  // Current connected user stats
+  const userScores = calculateReputationScores(
+    address || '',
+    jobs,
+    userProfile,
+    Number(onChainReputationCount || 0),
+    Boolean(isArbitrator),
+    judgeAddr
   );
-  const userCompletedJobsCount = userCompletedJobs.length;
-  
-  // Combine on-chain reputation count with local completed jobs
-  const reputationCount = Math.max(Number(onChainReputationCount || 0), userCompletedJobsCount);
 
-  const userVolume = userCompletedJobs.reduce((sum, j) => {
-    const earnedFraction = j.dispute?.resolved ? ((j.dispute.rulingBps ?? 0) / 10000) : 1.0;
-    return sum + (parseFloat(j.amountUsdc || '0') * earnedFraction);
-  }, 0);
+  const reputationCount = userScores.completedJobsCount;
+  const escrowPoints = userScores.escrowPoints;
+  const multisigPoints = userScores.arbitrationPoints;
+  const govPoints = userScores.attestationBonus;
+  const totalPoints = userScores.totalPoints;
+  const userVolume = userScores.totalVolume;
+  const userCompletedJobsCount = userScores.completedJobsCount;
 
-  // Calculate dynamic points breakdown based on reputation count
-  const escrowPoints = reputationCount * 60;
-  const multisigPoints = isArbitrator ? reputationCount * 25 : 0;
-  const govPoints = reputationCount > 0 ? (reputationCount * 15) + 10 : 0;
-  const totalPoints = escrowPoints + multisigPoints + govPoints;
-
-  // Exclude non-developer roles/addresses (judge, admins, client) from rankings
-  const judgeAddr = (import.meta.env.VITE_JUDGE_ADDRESS || '0xB8aa0398B91A150B041DA819bc954Bb356e009Dd').toLowerCase();
-  const adminAddr1 = (import.meta.env.VITE_ADMIN_ADDRESS_1 || '0x62cdfc0692cc675c95304bace2c834d8f901dcba').toLowerCase();
-  const adminAddr2 = (import.meta.env.VITE_ADMIN_ADDRESS_2 || '0x25F6C8ed995C811E6c0ADb1D66A60830E8115e9A').toLowerCase();
-  const adminAddr3 = '0xb30F2eFBCEBC529d946e05C9ccE0f1ffFB7e1aB1'.toLowerCase();
-  const clientAddr = (import.meta.env.VITE_CLIENT_ADDRESS || '0x9999888877776666555544443333222211110000').toLowerCase();
-
-  // Compute leaderboard first to determine dynamic rank
+  // Compute leaderboard across all registered profiles with the unified reputation system
   const leaderboardData = Object.values(profiles)
-    .filter((profile) => {
-      const lower = profile.address.toLowerCase();
-      return lower !== judgeAddr && lower !== adminAddr1 && lower !== adminAddr2 && lower !== adminAddr3 && lower !== clientAddr;
-    })
     .map((profile) => {
-      const isYou = profile.address.toLowerCase() === address?.toLowerCase();
-      // For profile entries, count their completed/active jobs in real-time
-      const profileJobs = jobs.filter(
-        (j) => j.freelancer?.toLowerCase() === profile.address.toLowerCase()
+      const isYou = profile.address?.toLowerCase() === address?.toLowerCase();
+      const lower = profile.address?.toLowerCase();
+      const isJudge = lower === judgeAddr;
+
+      const scores = calculateReputationScores(
+        profile.address,
+        jobs,
+        profile,
+        profile.reputationSbtCount || 0,
+        isJudge,
+        judgeAddr
       );
-      const profileCompletedJobs = profileJobs.filter(j => j.status === 'Completed');
-      const profileCompletedJobsCount = profileCompletedJobs.length;
 
-      const totalVolumeHandled = profileJobs.reduce((sum, j) => {
-        if (j.status === 'Completed') {
-          const earnedFraction = j.dispute?.resolved ? ((j.dispute.rulingBps ?? 0) / 10000) : 1.0;
-          return sum + (parseFloat(j.amountUsdc || '0') * earnedFraction);
-        }
-        if (j.status === 'Submitted' || j.status === 'Selected') {
-          return sum + parseFloat(j.amountUsdc || '0');
-        }
-        return sum;
-      }, 0);
-
-      const combinedRep = Math.max(profile.reputationSbtCount || 0, profileCompletedJobsCount);
-      const pts = combinedRep * 100;
-      const successRatePercent = profileCompletedJobsCount > 0
-        ? Math.round((profileCompletedJobs.filter(j => !j.dispute || (j.dispute.resolved && (j.dispute.rulingBps ?? 0) >= 5000)).length / profileCompletedJobsCount) * 100)
-        : (profileJobs.length > 0 ? 100 : 0);
+      const roleDisplay = profile.title 
+        ? profile.title
+        : profile.skills && profile.skills.length > 0
+          ? `${profile.skills[0]} Engineer`
+          : profile.primaryCategory === 'web3' 
+            ? 'Web3 Engineer' 
+            : profile.primaryCategory === 'frontend' 
+              ? 'Frontend Developer' 
+              : profile.primaryCategory === 'backend' 
+                ? 'Backend Developer' 
+                : 'Smart Contract Developer';
 
       const formatEarnings = (val: number): string => {
         if (!val || val <= 0) return '$0.0k';
@@ -101,30 +97,36 @@ export const Reputation: React.FC = () => {
         return `$${val.toFixed(1)}`;
       };
 
+      const rawName = profile.displayName && profile.displayName !== 'Anonymous PolyLancer'
+        ? profile.displayName
+        : profile.githubUsername
+          ? `@${profile.githubUsername}`
+          : `${profile.address.slice(0, 6)}...${profile.address.slice(-4)}`;
+
       return {
         rank: 0,
-        name: isYou ? `${profile.displayName || 'Anonymous'} (You)` : (profile.displayName || `${profile.address.slice(0, 6)}...${profile.address.slice(-4)}`),
-        role: profile.primaryCategory === 'web3' ? 'Web3 Engineer' : profile.primaryCategory === 'frontend' ? 'Frontend Dev' : profile.primaryCategory === 'backend' ? 'Backend Dev' : 'Sovereign Developer',
-        points: pts || 10,
-        successRate: (profileCompletedJobsCount > 0 || profileJobs.length > 0) ? `${successRatePercent}%` : '0%',
-        earnings: formatEarnings(totalVolumeHandled),
+        name: isYou ? `${rawName} (You)` : rawName,
+        role: roleDisplay,
+        points: scores.totalPoints,
+        successRate: `${scores.successRatePercent}%`,
+        earnings: formatEarnings(scores.totalVolume),
         isUser: isYou,
-        avatar: profile.avatarUrl || 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80',
+        avatar: profile.avatarUrl || (profile.githubUsername ? `https://github.com/${profile.githubUsername}.png` : `https://api.dicebear.com/7.x/identicon/svg?seed=${profile.address}`),
         address: profile.address
       };
     })
     .concat(
-      address && currentRole === 'freelancer' && !Object.keys(profiles).some(k => k.toLowerCase() === address.toLowerCase())
+      address && !Object.keys(profiles).some(k => k.toLowerCase() === address.toLowerCase())
         ? [
             {
               rank: 0,
-              name: address ? `${address.slice(0, 6)}...${address.slice(-4)} (You)` : 'You',
-              role: isArbitrator ? 'DAO Arbitrator' : 'Web3 Engineer',
-              points: totalPoints || 10,
-              successRate: userCompletedJobsCount > 0 ? '100%' : '0%',
-              earnings: userVolume > 0 ? (userVolume >= 1000 ? `$${(userVolume / 1000).toFixed(1)}k` : `$${userVolume.toFixed(1)}`) : '$0.0k',
+              name: `${address.slice(0, 6)}...${address.slice(-4)} (You)`,
+              role: isArbitrator ? 'Protocol Arbitrator' : currentRole === 'admin' ? 'DAO Admin' : 'Web3 Engineer',
+              points: userScores.totalPoints,
+              successRate: `${userScores.successRatePercent}%`,
+              earnings: userScores.totalVolume > 0 ? (userScores.totalVolume >= 1000 ? `$${(userScores.totalVolume / 1000).toFixed(1)}k` : `$${userScores.totalVolume.toFixed(1)}`) : '$0.0k',
               isUser: true,
-              avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80',
+              avatar: `https://api.dicebear.com/7.x/identicon/svg?seed=${address}`,
               address: address
             }
           ]
@@ -140,7 +142,7 @@ export const Reputation: React.FC = () => {
   let activeTier: 'Diamond' | 'Gold' | 'Silver' | 'None' = 'None';
   let tierProgress = 0;
   let ptsLeft = 100 - totalPoints;
-  let nextTierName = 'Silver';
+  let nextTierName = 'Silver Tier';
   let rankLabel = 'Unranked';
 
   if (totalPoints >= 800) {
@@ -150,19 +152,19 @@ export const Reputation: React.FC = () => {
     tierProgress = Math.min(100, ((totalPoints - 800) / 700) * 100);
   } else if (totalPoints >= 300) {
     activeTier = 'Gold';
-    nextTierName = 'Diamond';
+    nextTierName = 'Diamond Tier';
     ptsLeft = 800 - totalPoints;
     tierProgress = ((totalPoints - 300) / 500) * 100;
   } else if (totalPoints >= 100) {
     activeTier = 'Silver';
-    nextTierName = 'Gold';
+    nextTierName = 'Gold Tier';
     ptsLeft = 300 - totalPoints;
     tierProgress = ((totalPoints - 100) / 200) * 100;
   } else {
     activeTier = 'None';
-    nextTierName = 'Silver';
+    nextTierName = 'Silver Tier';
     ptsLeft = 100 - totalPoints;
-    tierProgress = (totalPoints / 100) * 100;
+    tierProgress = Math.max(0, (totalPoints / 100) * 100);
   }
 
   if (userRankIndex !== -1 && totalPoints > 0) {
@@ -177,31 +179,30 @@ export const Reputation: React.FC = () => {
 
   const getRoleBadge = (role: string) => {
     const normalized = role.toLowerCase();
-    if (normalized.includes('solidity') || normalized.includes('architect')) {
+    if (normalized.includes('solidity') || normalized.includes('smart contract') || normalized.includes('architect')) {
       return (
-        <span className="text-[9.5px] px-2 py-0.5 rounded-md font-extrabold inline-flex items-center gap-1 bg-amber-50/50 text-amber-700 border border-amber-200/50 font-mono tracking-wide">
-          <Star size={9.5} className="fill-amber-500/10 text-amber-500" /> {role}
+        <span className="text-[9.5px] px-2.5 py-0.5 rounded-full font-bold inline-flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200/80 font-mono tracking-wide">
+          <Star size={10} className="fill-amber-500 text-amber-500" /> {role}
         </span>
       );
     }
-    if (normalized.includes('auditor') || normalized.includes('cyber') || normalized.includes('shield')) {
+    if (normalized.includes('auditor') || normalized.includes('security') || normalized.includes('shield')) {
       return (
-        <span className="text-[9.5px] px-2 py-0.5 rounded-md font-extrabold inline-flex items-center gap-1 bg-blue-50/50 text-blue-700 border border-blue-200/50 font-mono tracking-wide">
-          <ShieldCheck size={9.5} className="text-blue-500" /> {role}
+        <span className="text-[9.5px] px-2.5 py-0.5 rounded-full font-bold inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono tracking-wide">
+          <ShieldCheck size={10} className="text-emerald-600" /> {role}
         </span>
       );
     }
-    if (normalized.includes('devops') || normalized.includes('lead') || normalized.includes('backend')) {
+    if (normalized.includes('judge') || normalized.includes('arbitrat')) {
       return (
-        <span className="text-[9.5px] px-2 py-0.5 rounded-md font-extrabold inline-flex items-center gap-1.5 bg-orange-50/50 text-orange-800 border border-orange-200/50 font-mono tracking-wide">
-          <span className="text-[10px] font-black font-mono text-orange-600">&gt;_</span> {role}
+        <span className="text-[9.5px] px-2.5 py-0.5 rounded-full font-bold inline-flex items-center gap-1 bg-purple-50 text-purple-800 border border-purple-200/80 font-mono tracking-wide">
+          <Scale size={10} className="text-purple-600" /> {role}
         </span>
       );
     }
-    // Default (Web3 Engineer, etc.)
     return (
-      <span className="text-[9.5px] px-2 py-0.5 rounded-md font-extrabold inline-flex items-center gap-1 bg-purple-50 text-purple-700 border border-purple-200/50 font-mono tracking-wide">
-        <span className="text-[10px] font-black font-mono text-purple-500">&lt;/&gt;</span> {role}
+      <span className="text-[9.5px] px-2.5 py-0.5 rounded-full font-bold inline-flex items-center gap-1 bg-blue-50 text-blue-800 border border-blue-200/80 font-mono tracking-wide">
+        <span className="text-[10px] font-black font-mono text-blue-600">&lt;/&gt;</span> {role}
       </span>
     );
   };
@@ -439,21 +440,21 @@ export const Reputation: React.FC = () => {
                   <span className="font-mono text-emerald-600 font-black text-sm">+{escrowPoints} pts</span>
                 </div>
                 <p className="text-[10px] text-slate-500 font-mono">
-                  {reputationCount > 0 
-                    ? `Based on ${reputationCount * 12} block-verified deliverables across ${reputationCount * 3} projects.`
+                  {userCompletedJobsCount > 0 
+                    ? `Based on ${userCompletedJobsCount} completed escrow contract${userCompletedJobsCount !== 1 ? 's' : ''} (100 pts each).`
                     : 'Complete verified jobs to build your escrow success history.'}
                 </p>
                 <div className="flex items-center gap-2.5 pt-0.5">
                   <div className="flex-1 bg-slate-200/60 h-1.5 rounded-full overflow-hidden shadow-inner">
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: reputationCount > 0 ? '64%' : '0%' }}
+                      animate={{ width: totalPoints > 0 ? `${Math.round((escrowPoints / totalPoints) * 100)}%` : '0%' }}
                       transition={{ duration: 1.2, ease: 'easeOut' }}
                       className="bg-emerald-600 h-full rounded-full" 
                     />
                   </div>
                   <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.2 rounded-full text-[9px] font-mono font-black shrink-0">
-                    {reputationCount > 0 ? '64%' : '0%'}
+                    {totalPoints > 0 ? `${Math.round((escrowPoints / totalPoints) * 100)}%` : '0%'}
                   </span>
                 </div>
               </div>
@@ -470,21 +471,21 @@ export const Reputation: React.FC = () => {
                   <span className="font-mono text-blue-600 font-black text-sm">+{multisigPoints} pts</span>
                 </div>
                 <p className="text-[10px] text-slate-500 font-mono">
-                  {isArbitrator 
-                    ? `Earned from ${reputationCount * 3 || 15} high-stakes escrow releases with 0 disputes.`
+                  {multisigPoints > 0 
+                    ? `Earned +${multisigPoints} pts from verified arbitrator role participation.`
                     : 'Acquire arbitrator credentials to earn multi-sig verification points.'}
                 </p>
                 <div className="flex items-center gap-2.5 pt-0.5">
                   <div className="flex-1 bg-slate-200/60 h-1.5 rounded-full overflow-hidden shadow-inner">
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: isArbitrator ? '21%' : '0%' }}
+                      animate={{ width: totalPoints > 0 ? `${Math.round((multisigPoints / totalPoints) * 100)}%` : '0%' }}
                       transition={{ duration: 1.2, ease: 'easeOut' }}
                       className="bg-blue-600 h-full rounded-full" 
                     />
                   </div>
                   <span className="bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.2 rounded-full text-[9px] font-mono font-black shrink-0">
-                    {isArbitrator ? '21%' : '0%'}
+                    {totalPoints > 0 ? `${Math.round((multisigPoints / totalPoints) * 100)}%` : '0%'}
                   </span>
                 </div>
               </div>
@@ -501,19 +502,21 @@ export const Reputation: React.FC = () => {
                   <span className="font-mono text-amber-600 font-black text-sm">+{govPoints} pts</span>
                 </div>
                 <p className="text-[10px] text-slate-500 font-mono">
-                  Protocol governance votes and peer milestone reviews.
+                  {govPoints > 0 
+                    ? `+${govPoints} pts from verified GitHub developer attestation.`
+                    : 'Verify your GitHub account to earn attestation bonus points.'}
                 </p>
                 <div className="flex items-center gap-2.5 pt-0.5">
                   <div className="flex-1 bg-slate-200/60 h-1.5 rounded-full overflow-hidden shadow-inner">
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: reputationCount > 0 ? '15%' : '0%' }}
+                      animate={{ width: totalPoints > 0 ? `${Math.round((govPoints / totalPoints) * 100)}%` : '0%' }}
                       transition={{ duration: 1.2, ease: 'easeOut' }}
                       className="bg-amber-500 h-full rounded-full" 
                     />
                   </div>
                   <span className="bg-amber-50 text-amber-700 border border-amber-100 px-1.5 py-0.2 rounded-full text-[9px] font-mono font-black shrink-0">
-                    {reputationCount > 0 ? '15%' : '0%'}
+                    {totalPoints > 0 ? `${Math.round((govPoints / totalPoints) * 100)}%` : '0%'}
                   </span>
                 </div>
               </div>
@@ -675,7 +678,7 @@ export const Reputation: React.FC = () => {
             </div>
             <p className="text-[9.5px] text-slate-500 font-medium leading-relaxed">
               {ptsLeft > 0 
-                ? `Earn ${ptsLeft} more reputation points to enter the Elite Platinum circle.`
+                ? `Earn ${ptsLeft} more reputation points to unlock ${nextTierName} standing.`
                 : 'You have attained the highest soulbound reputation tier on PolyLance!'}
             </p>
             <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden border border-slate-300/40 shadow-inner">
@@ -923,90 +926,106 @@ export const Reputation: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-150 font-medium">
-              {leaderboardData.map((row) => (
-                <tr 
-                  key={row.address}
-                  className={`hover:bg-slate-50/50 transition-colors ${
-                    row.isUser 
-                      ? 'bg-purple-50/20 border-y border-purple-150' 
-                      : ''
-                  }`}
-                >
-                  <td className="px-4 py-3 text-center font-mono">
-                    {row.rank === 1 ? (
-                      <span className="text-amber-500 font-extrabold text-sm flex items-center justify-center gap-0.5 font-sans">
-                        🥇 1
-                      </span>
-                    ) : row.rank === 2 ? (
-                      <span className="text-slate-400 font-extrabold text-sm flex items-center justify-center gap-0.5 font-sans">
-                        🥈 2
-                      </span>
-                    ) : row.rank === 3 ? (
-                      <span className="text-amber-800 font-extrabold text-sm flex items-center justify-center gap-0.5 font-sans">
-                        🥉 3
-                      </span>
-                    ) : (
-                      <span className="text-slate-400 font-bold">{row.rank}</span>
-                    )}
+              {leaderboardData.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500 font-sans">
+                    <Trophy size={36} className="mx-auto text-purple-300 mb-2" />
+                    <p className="font-bold text-slate-800 text-sm">No Attested Developers Yet</p>
+                    <p className="text-xs text-slate-500 font-mono mt-1">
+                      Complete escrow milestones and mint Reputation SBTs to claim the #1 spot on the global leaderboard.
+                    </p>
                   </td>
-                  
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      {row.address ? (
-                        <Link to={`/profile/${row.address}`} className="relative shrink-0 hover:opacity-90 transition-opacity">
-                          <img
-                            src={row.avatar}
-                            alt={row.name}
-                            className={`w-9 h-9 rounded-full object-cover border ${
-                              row.isUser ? 'border-purple-300 ring-2 ring-purple-100' : 'border-slate-200'
-                            }`}
-                          />
-                        </Link>
+                </tr>
+              ) : (
+                leaderboardData.map((row) => (
+                  <tr 
+                    key={row.address}
+                    className={`hover:bg-slate-50/50 transition-colors ${
+                      row.isUser 
+                        ? 'bg-purple-50/20 border-y border-purple-150' 
+                        : ''
+                    }`}
+                  >
+                    <td className="px-4 py-3 text-center font-mono">
+                      {row.rank === 1 ? (
+                        <span className="text-amber-500 font-extrabold text-sm flex items-center justify-center gap-0.5 font-sans">
+                          🥇 1
+                        </span>
+                      ) : row.rank === 2 ? (
+                        <span className="text-slate-400 font-extrabold text-sm flex items-center justify-center gap-0.5 font-sans">
+                          🥈 2
+                        </span>
+                      ) : row.rank === 3 ? (
+                        <span className="text-amber-800 font-extrabold text-sm flex items-center justify-center gap-0.5 font-sans">
+                          🥉 3
+                        </span>
                       ) : (
-                        <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200 text-slate-400 font-bold">
-                          ?
-                        </div>
+                        <span className="text-slate-400 font-bold">{row.rank}</span>
                       )}
-                      
-                      <div>
+                    </td>
+                    
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
                         {row.address ? (
-                          <Link to={`/profile/${row.address}`} className="font-bold text-slate-900 hover:text-purple-700 hover:underline">
-                            {row.name}
+                          <Link to={`/profile/${row.address}`} className="relative shrink-0 hover:opacity-90 transition-opacity">
+                            <img
+                              src={row.avatar}
+                              alt={row.name}
+                              className={`w-9 h-9 rounded-full object-cover border ${
+                                row.isUser ? 'border-purple-600 ring-2 ring-purple-600/20' : 'border-slate-200'
+                              }`}
+                            />
+                            {row.isUser && (
+                              <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-purple-600 text-white rounded-full flex items-center justify-center text-[8px] font-black font-mono border-2 border-white">
+                                ★
+                              </span>
+                            )}
                           </Link>
                         ) : (
-                          <span className="font-bold text-slate-500">Open Spot</span>
+                          <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 border border-slate-200 font-bold">
+                            ?
+                          </div>
                         )}
-                        <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
-                          {row.address ? `${row.address.slice(0, 8)}...${row.address.slice(-6)}` : '0x0000...0000'}
-                        </span>
+                        
+                        <div>
+                          {row.address ? (
+                            <Link 
+                              to={`/profile/${row.address}`} 
+                              className={`font-bold hover:underline block leading-tight text-xs ${
+                                row.isUser ? 'text-purple-950 font-black' : 'text-slate-900'
+                              }`}
+                            >
+                              {row.name}
+                            </Link>
+                          ) : (
+                            <span className="font-bold text-slate-500 block leading-tight text-xs">
+                              {row.name}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                            {row.address ? `${row.address.slice(0, 8)}...${row.address.slice(-6)}` : '0x0000...0000'}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  
-                  <td className="px-4 py-3">
-                    {getRoleBadge(row.role)}
-                  </td>
-                  
-                  <td className="px-4 py-3 text-center font-mono font-bold text-slate-800">
-                    {row.successRate}
-                  </td>
-                  
-                  <td className="px-4 py-3 text-center font-mono font-black text-emerald-600">
-                    {row.earnings}
-                  </td>
-                  
-                  <td className="px-4 py-3 text-right font-mono font-black text-purple-600 pr-6">
-                    {row.points} pts
-                  </td>
-                </tr>
-              ))}
-              
-              {leaderboardData.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-slate-400 font-mono font-medium">
-                    No verified freelancers found on the leaderboard.
-                  </td>
-                </tr>
+                    </td>
+                    
+                    <td className="px-4 py-3">
+                      {getRoleBadge(row.role)}
+                    </td>
+                    
+                    <td className="px-4 py-3 text-center font-mono font-bold text-slate-800">
+                      {row.successRate}
+                    </td>
+                    
+                    <td className="px-4 py-3 text-center font-mono font-black text-emerald-600">
+                      {row.earnings}
+                    </td>
+                    
+                    <td className="px-4 py-3 text-right font-mono font-black text-purple-600 pr-6">
+                      {row.points} pts
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>

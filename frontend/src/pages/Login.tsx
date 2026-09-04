@@ -46,7 +46,7 @@ export const Login: React.FC = () => {
       desc: 'Connect using your MetaMask wallet instantly.',
       arrowColor: 'text-orange-500 bg-orange-50/20 border-orange-100/30 group-hover:bg-orange-50 group-hover:border-orange-300',
       logo: (
-        <img src="/MetaMask_logo.png" alt="MetaMask" className="w-9 h-9 object-contain shrink-0" />
+        <img src={`${import.meta.env.BASE_URL}MetaMask_logo.png`} alt="MetaMask" className="w-9 h-9 object-contain shrink-0" />
       )
     },
     {
@@ -57,7 +57,7 @@ export const Login: React.FC = () => {
       desc: 'Scan with your wallet app to connect.',
       arrowColor: 'text-blue-500 bg-blue-50/20 border-blue-100/30 group-hover:bg-blue-50 group-hover:border-blue-300',
       logo: (
-        <img src="/WalletConnect_logo.png" alt="WalletConnect" className="w-9 h-9 object-contain shrink-0" />
+        <img src={`${import.meta.env.BASE_URL}WalletConnect_logo.png`} alt="WalletConnect" className="w-9 h-9 object-contain shrink-0" />
       )
     },
     {
@@ -68,10 +68,11 @@ export const Login: React.FC = () => {
       desc: 'Connect with Coinbase Wallet in one click.',
       arrowColor: 'text-blue-500 bg-blue-50/20 border-blue-100/30 group-hover:bg-blue-50 group-hover:border-blue-300',
       logo: (
-        <img src="/CoinBase_logo.png" alt="Coinbase Wallet" className="w-9 h-9 object-contain shrink-0" />
+        <img src={`${import.meta.env.BASE_URL}CoinBase_logo.png`} alt="Coinbase Wallet" className="w-9 h-9 object-contain shrink-0" />
       )
     },
   ];
+
 
   // Dynamic routing based on connected address
   React.useEffect(() => {
@@ -79,9 +80,9 @@ export const Login: React.FC = () => {
       const lowerAddress = address.toLowerCase();
 
       // 1. Check if Admin
-      const isAdmin = lowerAddress === (import.meta.env.VITE_ADMIN_ADDRESS_1 || '0x62cdfc0692cc675c95304bace2c834d8f901dcba').toLowerCase() || 
-                      lowerAddress === (import.meta.env.VITE_ADMIN_ADDRESS_2 || '0x25f6c8ed995c811e6c0adb1d66a60830e8115e9a').toLowerCase() ||
-                      lowerAddress === '0xb30f2efbcebc529d946e05c9cce0f1fffb7e1ab1';
+      const isAdmin = lowerAddress === (import.meta.env.VITE_ADMIN_ADDRESS_1 || '').toLowerCase() || 
+                      lowerAddress === (import.meta.env.VITE_ADMIN_ADDRESS_2 || '').toLowerCase() ||
+                      lowerAddress === (import.meta.env.VITE_ADMIN_ADDRESS_3 || '').toLowerCase();
       if (isAdmin) {
         setRole('admin');
         confetti({ particleCount: 80, spread: 70 });
@@ -90,7 +91,7 @@ export const Login: React.FC = () => {
       }
 
       // 2. Check if Judge
-      const isJudge = lowerAddress === (import.meta.env.VITE_JUDGE_ADDRESS || '0xb8aa0398b91a150b041da819bc954bb356e009dd').toLowerCase();
+      const isJudge = lowerAddress === (import.meta.env.VITE_JUDGE_ADDRESS || '').toLowerCase();
       if (isJudge) {
         setRole('judge');
         confetti({ particleCount: 80, spread: 70 });

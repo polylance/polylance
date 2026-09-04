@@ -1,4 +1,4 @@
-export type JobStatus = 'Open' | 'Selected' | 'Submitted' | 'Disputed' | 'Completed' | 'Cancelled';
+export type JobStatus = 'Open' | 'Selected' | 'Funded' | 'Submitted' | 'Disputed' | 'Completed' | 'Cancelled';
 
 export type DisputeReason = 'QUALITY' | 'NON_DELIVERY' | 'SCOPE_DISAGREEMENT' | 'PAYMENT_DISPUTE' | 'OTHER';
 
@@ -14,10 +14,20 @@ export interface Application {
   githubScore: number;
 }
 
+export interface DeliverableFile {
+  cid: string;
+  name: string;
+  type: string;
+  size: number;
+  dataUrl?: string;
+  uploadedAt: number;
+}
+
 export interface ProofOfWork {
   title: string;
   description: string;
   evidenceHashes: string[];
+  evidenceFiles?: DeliverableFile[];
   submittedAt: number;
   externalLink?: string;
 }
@@ -41,8 +51,8 @@ export interface JobEvent {
   step: string;
   title: string;
   timestamp: number;
-  txHash: string;
-  status: 'completed' | 'current' | 'pending';
+  txHash?: string;
+  status: 'completed' | 'current' | 'pending' | 'upcoming';
   actor?: string;
   description?: string;
 }
@@ -77,6 +87,32 @@ export interface ModificationRequest {
   status: 'Pending' | 'Addressed';
 }
 
+export interface NegotiationProposal {
+  id: string;
+  jobId?: string;
+  applicantAddress?: string;
+  proposedBy: 'Client' | 'Freelancer';
+  amountUsdc: string;
+  deadlineDays: number;
+  note?: string;
+  isFinalCall?: boolean;
+  status: 'Pending' | 'Accepted' | 'Rejected' | 'Countered';
+  createdAt: number;
+  respondedAt?: number;
+  responseNote?: string;
+}
+
+export interface ChatMessage {
+  id?: string;
+  sender: 'Client' | 'Freelancer' | 'Judge';
+  senderAddress?: string;
+  recipientAddress?: string;
+  applicantAddress?: string;
+  text: string;
+  timestamp: number;
+  proposal?: NegotiationProposal;
+}
+
 export interface Job {
   id: string;
   contractAddress: string;
@@ -91,6 +127,7 @@ export interface Job {
   title: string;
   description: string;
   category: SkillCategory;
+  skillsRequired?: string[];
   reviewPeriodDays: number;
   createdAt: number;
   submittedAt?: number;
@@ -103,8 +140,15 @@ export interface Job {
   progressUpdates?: ProgressUpdate[];
   extensionRequests?: TimeExtensionRequest[];
   modificationRequests?: ModificationRequest[];
+  negotiationProposals?: NegotiationProposal[];
   events: JobEvent[];
-  chatMessages?: { sender: 'Client' | 'Freelancer' | 'Judge'; text: string; timestamp: number }[];
+  chatMessages?: ChatMessage[];
+  sbtTokenId?: number;
+  negotiatedAmount?: string;
+  negotiatedDeadlineDays?: number;
+  preAcceptMessages?: { sender: string; senderRole: 'Client' | 'Freelancer'; text: string; timestamp: number; proposal?: NegotiationProposal; applicantAddress?: string }[];
+  completedAt?: number;
+  chatClearedAt?: number;
 }
 
 export interface UserProfile {
@@ -128,7 +172,9 @@ export interface UserProfile {
   reposCount?: number;
   prsCount?: number;
   reputationTier?: string;
-  role?: 'freelancer' | 'client';
+  role?: 'freelancer' | 'client' | 'admin' | 'judge';
+  title?: string;
+  hourlyRateUsdc?: number;
 }
 
 export interface DaoProposal {
@@ -162,6 +208,7 @@ export interface TreasuryProposal {
   confirmationsRequired?: number;
   executed: boolean;
   isExecuted?: boolean;
+  timestamp?: number;
 }
 
 export interface TreasuryState {
@@ -190,6 +237,9 @@ export interface JudgeRecord {
   addedAt: number;
   addedBy: string;
   notes?: string;
+  specialty?: string;
+  casesResolved?: number;
+  avgResolutionTime?: string;
 }
 
 export interface JudgeMessage {
