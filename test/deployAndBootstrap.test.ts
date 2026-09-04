@@ -15,11 +15,26 @@ describe("Deployment & Bootstrap Scripts Pipeline", function () {
   const originalEnv = { ...process.env };
 
   before(async function () {
-    [deployer, judge1, judge2, treasurySafe, oracle] = await ethers.getSigners();
+    [deployer] = await ethers.getSigners();
+    judge1 = ethers.Wallet.createRandom();
+    judge2 = ethers.Wallet.createRandom();
+    treasurySafe = ethers.Wallet.createRandom();
+    oracle = ethers.Wallet.createRandom();
+  });
+
+  beforeEach(function () {
+    const manifestPath = path.join(__dirname, "..", "deployments", "hardhat_addresses.json");
+    if (fs.existsSync(manifestPath)) {
+      fs.unlinkSync(manifestPath);
+    }
   });
 
   afterEach(function () {
     process.env = { ...originalEnv };
+    const manifestPath = path.join(__dirname, "..", "deployments", "hardhat_addresses.json");
+    if (fs.existsSync(manifestPath)) {
+      fs.unlinkSync(manifestPath);
+    }
   });
 
   it("should deploy all 6 contracts and write deployment manifest to deployments/hardhat_addresses.json", async function () {
@@ -49,7 +64,7 @@ describe("Deployment & Bootstrap Scripts Pipeline", function () {
     delete process.env.TREASURY_SAFE_ADDRESS;
     delete process.env.ORACLE_ADDRESS;
 
-    await expect(bootstrapRoles()).to.be.rejectedWith("Bootstrap failed: missing env vars");
+    await expect(bootstrapRoles()).to.be.rejectedWith("SECURITY EXCEPTION: JUDGE_1_ADDRESS is not set in environment");
   });
 
   it("should execute full bootstrap pipeline, grant roles, and pass on-chain verification", async function () {

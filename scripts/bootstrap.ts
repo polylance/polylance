@@ -95,14 +95,30 @@ export async function bootstrapRoles(): Promise<boolean> {
   await tx.wait();
   console.log("    ✓ Oracle operator granted:", ORACLE_SIGNING_ADDRESS);
 
-  // ── 3.5 Approve Polygon Amoy testnet USDC ──
+  // ── 3.5 Approve payment tokens (USDC/USDT) ──
   const AMOY_USDC = "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582";
+  const POLYGON_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
+  const POLYGON_USDT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
+
   if (network === "amoy") {
     const isApproved = await factory.approvedPaymentTokens(AMOY_USDC);
     if (!isApproved) {
       tx = await factory.setApprovedPaymentToken(AMOY_USDC, true);
       await tx.wait();
-      console.log("    ✓ USDC approved as payment token:", AMOY_USDC);
+      console.log("    ✓ Amoy USDC approved as payment token:", AMOY_USDC);
+    }
+  } else if (network === "polygon") {
+    const isUsdcApproved = await factory.approvedPaymentTokens(POLYGON_USDC);
+    if (!isUsdcApproved) {
+      tx = await factory.setApprovedPaymentToken(POLYGON_USDC, true);
+      await tx.wait();
+      console.log("    ✓ Polygon Mainnet native USDC approved as payment token:", POLYGON_USDC);
+    }
+    const isUsdtApproved = await factory.approvedPaymentTokens(POLYGON_USDT);
+    if (!isUsdtApproved) {
+      tx = await factory.setApprovedPaymentToken(POLYGON_USDT, true);
+      await tx.wait();
+      console.log("    ✓ Polygon Mainnet USDT approved as payment token:", POLYGON_USDT);
     }
   }
 

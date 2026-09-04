@@ -37,7 +37,10 @@ function validateDeployerForRealNetwork(privateKey: string | undefined, networkN
 if (process.argv.includes("--network") && !process.argv.includes("hardhat") && !process.argv.includes("localhost")) {
   const networkArgIndex = process.argv.indexOf("--network");
   const targetNetwork = process.argv[networkArgIndex + 1] ?? "real-network";
-  validateDeployerForRealNetwork(process.env.PRIVATE_KEY, targetNetwork);
+  const keyToValidate = targetNetwork === "polygon" 
+    ? process.env.MAINNET_DEPLOYER_PRIVATE_KEY 
+    : process.env.PRIVATE_KEY;
+  validateDeployerForRealNetwork(keyToValidate, targetNetwork);
 }
 
 const AMOY_RPC_URL = process.env.AMOY_RPC_URL && process.env.AMOY_RPC_URL !== "https://rpc-amoy.polygon.technology"
@@ -45,6 +48,9 @@ const AMOY_RPC_URL = process.env.AMOY_RPC_URL && process.env.AMOY_RPC_URL !== "h
   : "https://polygon-amoy-bor-rpc.publicnode.com";
 
 const amoyAccounts = process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [];
+
+const POLYGON_MAINNET_RPC_URL = process.env.POLYGON_MAINNET_RPC_URL || "https://polygon-rpc.com";
+const polygonAccounts = process.env.MAINNET_DEPLOYER_PRIVATE_KEY ? [process.env.MAINNET_DEPLOYER_PRIVATE_KEY] : [];
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -70,6 +76,11 @@ const config: HardhatUserConfig = {
       accounts: amoyAccounts,
       chainId: 80002,
     },
+    polygon: {
+      url: POLYGON_MAINNET_RPC_URL,
+      accounts: polygonAccounts,
+      chainId: 137,
+    },
   },
   gasReporter: {
     enabled: process.env.REPORT_GAS !== undefined,
@@ -78,6 +89,7 @@ const config: HardhatUserConfig = {
   etherscan: {
     apiKey: {
       polygonAmoy: process.env.POLYGONSCAN_API_KEY ?? "",
+      polygon: process.env.POLYGONSCAN_API_KEY ?? "",
     },
   },
 };
