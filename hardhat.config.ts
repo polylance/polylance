@@ -10,10 +10,10 @@ const KNOWN_PUBLIC_TEST_KEYS = [
   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", // Hardhat default account #1
 ];
 
-function validateDeployerForRealNetwork(privateKey: string | undefined, networkName: string) {
-  if (!privateKey) {
+function validateDeployerForRealNetwork(privateKey: string | undefined, networkName: string, envVarName: string = "PRIVATE_KEY") {
+  if (!privateKey || privateKey.trim() === "") {
     throw new Error(
-      `PRIVATE_KEY is not set in environment — cannot deploy to ${networkName}. ` +
+      `${envVarName} is not set in environment — cannot deploy to ${networkName}. ` +
       `Refusing to configure a real network without an explicit deployer key.`
     );
   }
@@ -21,12 +21,12 @@ function validateDeployerForRealNetwork(privateKey: string | undefined, networkN
   try {
     derivedAddress = new Wallet(privateKey).address;
   } catch {
-    throw new Error(`PRIVATE_KEY is invalid — failed to derive wallet address.`);
+    throw new Error(`${envVarName} is invalid — failed to derive wallet address.`);
   }
 
   if (KNOWN_PUBLIC_TEST_KEYS.map((a) => a.toLowerCase()).includes(derivedAddress.toLowerCase())) {
     throw new Error(
-      `SECURITY EXCEPTION: PRIVATE_KEY resolves to a publicly known test account ` +
+      `SECURITY EXCEPTION: ${envVarName} resolves to a publicly known test account ` +
       `(${derivedAddress}). This key must NEVER be used for real network deployment (${networkName}). ` +
       `Generate a fresh key and fund it before deploying.`
     );
@@ -37,10 +37,12 @@ function validateDeployerForRealNetwork(privateKey: string | undefined, networkN
 if (process.argv.includes("--network") && !process.argv.includes("hardhat") && !process.argv.includes("localhost")) {
   const networkArgIndex = process.argv.indexOf("--network");
   const targetNetwork = process.argv[networkArgIndex + 1] ?? "real-network";
-  const keyToValidate = targetNetwork === "polygon" 
+  const isPolygon = targetNetwork === "polygon";
+  const keyToValidate = isPolygon 
     ? process.env.MAINNET_DEPLOYER_PRIVATE_KEY 
     : process.env.PRIVATE_KEY;
-  validateDeployerForRealNetwork(keyToValidate, targetNetwork);
+  const envVar = isPolygon ? "MAINNET_DEPLOYER_PRIVATE_KEY" : "PRIVATE_KEY";
+  validateDeployerForRealNetwork(keyToValidate, targetNetwork, envVar);
 }
 
 const AMOY_RPC_URL = process.env.AMOY_RPC_URL && process.env.AMOY_RPC_URL !== "https://rpc-amoy.polygon.technology"
