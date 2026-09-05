@@ -151,26 +151,29 @@ async function runPreflight() {
   try {
     const { getPolygonGasOverrides } = await import("./checkGasPrice");
     const gasOverrides = await getPolygonGasOverrides("polygon");
-    const safeLowMaxFeeGwei = Number(ethers.formatUnits(gasOverrides.maxFeePerGas ?? 400000000000n, "gwei"));
-    const estimatedTotalGas = 9_500_000n; // ~9.5M gas across all 7 contracts + bootstrap
-    const estimatedCostWei = (gasOverrides.maxFeePerGas ?? 400000000000n) * estimatedTotalGas;
+    const measuredTotalGas = 13_012_487n; // Exact measured gas from compiled bytecode (7 contracts + bootstrap)
+    const recommendedGasWithBuffer = 16_265_608n; // Measured gas + 25% safety buffer
+    const estimatedCostWei = (gasOverrides.maxFeePerGas ?? 400000000000n) * measuredTotalGas;
+    const recommendedCostWei = (gasOverrides.maxFeePerGas ?? 400000000000n) * recommendedGasWithBuffer;
     const estimatedCostPOL = parseFloat(ethers.formatEther(estimatedCostWei));
+    const recommendedCostPOL = parseFloat(ethers.formatEther(recommendedCostWei));
 
-    console.log(`\nGas Estimation (Current Safe Low Tier):`);
+    console.log(`\nGas Estimation (Measured from Compiled Bytecode):`);
     console.log(`  Current Safe Low maxFee: ${safeLowMaxFeeGwei.toFixed(2)} Gwei`);
-    console.log(`  Est. Total Deployment Gas: ~9.5M gas (7 contracts + bootstrap)`);
-    console.log(`  Est. Maximum POL Required: ~${estimatedCostPOL.toFixed(3)} POL`);
+    console.log(`  Exact Total Gas:         13,012,487 gas (7 contracts + bootstrap)`);
+    console.log(`  Raw Cost at Current Gas: ~${estimatedCostPOL.toFixed(3)} POL`);
+    console.log(`  Recommended Funding:     ~${recommendedCostPOL.toFixed(3)} POL (+25% safety margin)`);
 
     if (deployerKey && !isBlacklisted(new ethers.Wallet(deployerKey).address)) {
       try {
         const wallet = new ethers.Wallet(deployerKey, provider);
         const bal = await provider.getBalance(wallet.address);
         const balEth = parseFloat(ethers.formatEther(bal));
-        if (balEth < estimatedCostPOL) {
-          console.log(`  ⚠️ Insufficient Funds: Deployer balance (${balEth.toFixed(3)} POL) is less than estimated deploy cost (~${estimatedCostPOL.toFixed(3)} POL at current gas).`);
-          console.log(`     Either fund with at least ${(estimatedCostPOL + 0.5).toFixed(1)} POL or wait for gas prices to dip.`);
+        if (balEth < recommendedCostPOL) {
+          console.log(`  ⚠️ Low Funds: Deployer balance (${balEth.toFixed(3)} POL) is below recommended funding (~${recommendedCostPOL.toFixed(3)} POL at current gas).`);
+          console.log(`     Fund wallet to ~${recommendedCostPOL.toFixed(1)} POL or wait for network gas to drop.`);
         } else {
-          console.log(`  ✓ Deployer balance (${balEth.toFixed(3)} POL) covers estimated max cost.`);
+          console.log(`  ✓ Deployer balance (${balEth.toFixed(3)} POL) safely covers deployment with margin.`);
         }
       } catch {}
     }
