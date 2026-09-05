@@ -147,11 +147,33 @@ async function runPreflight() {
     allOk = false;
   }
 
-  // 5. Gas Estimation
+  // 5. Gas Estimation & Deployment Budget Check
   try {
-    const feeData = await provider.getFeeData();
-    const gasPriceGwei = ethers.formatUnits(feeData.gasPrice ?? 30000000000n, "gwei");
-    console.log(`\nNetwork Gas Price: ~${parseFloat(gasPriceGwei).toFixed(2)} Gwei`);
+    const { getPolygonGasOverrides } = await import("./checkGasPrice");
+    const gasOverrides = await getPolygonGasOverrides("polygon");
+    const safeLowMaxFeeGwei = Number(ethers.formatUnits(gasOverrides.maxFeePerGas ?? 400000000000n, "gwei"));
+    const estimatedTotalGas = 9_500_000n; // ~9.5M gas across all 7 contracts + bootstrap
+    const estimatedCostWei = (gasOverrides.maxFeePerGas ?? 400000000000n) * estimatedTotalGas;
+    const estimatedCostPOL = parseFloat(ethers.formatEther(estimatedCostWei));
+
+    console.log(`\nGas Estimation (Current Safe Low Tier):`);
+    console.log(`  Current Safe Low maxFee: ${safeLowMaxFeeGwei.toFixed(2)} Gwei`);
+    console.log(`  Est. Total Deployment Gas: ~9.5M gas (7 contracts + bootstrap)`);
+    console.log(`  Est. Maximum POL Required: ~${estimatedCostPOL.toFixed(3)} POL`);
+
+    if (deployerKey && !isBlacklisted(new ethers.Wallet(deployerKey).address)) {
+      try {
+        const wallet = new ethers.Wallet(deployerKey, provider);
+        const bal = await provider.getBalance(wallet.address);
+        const balEth = parseFloat(ethers.formatEther(bal));
+        if (balEth < estimatedCostPOL) {
+          console.log(`  ⚠️ Insufficient Funds: Deployer balance (${balEth.toFixed(3)} POL) is less than estimated deploy cost (~${estimatedCostPOL.toFixed(3)} POL at current gas).`);
+          console.log(`     Either fund with at least ${(estimatedCostPOL + 0.5).toFixed(1)} POL or wait for gas prices to dip.`);
+        } else {
+          console.log(`  ✓ Deployer balance (${balEth.toFixed(3)} POL) covers estimated max cost.`);
+        }
+      } catch {}
+    }
   } catch {}
 
   console.log("\n═══════════════════════════════════════════════════════════");
