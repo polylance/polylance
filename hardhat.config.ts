@@ -69,7 +69,9 @@ const AMOY_RPC_URL = process.env.AMOY_RPC_URL && process.env.AMOY_RPC_URL !== "h
 
 const amoyAccounts = process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [];
 
-const POLYGON_MAINNET_RPC_URL = process.env.POLYGON_MAINNET_RPC_URL || "https://polygon-rpc.com";
+const POLYGON_MAINNET_RPC_URL = process.env.POLYGON_MAINNET_RPC_URL && process.env.POLYGON_MAINNET_RPC_URL !== "https://polygon-rpc.com"
+  ? process.env.POLYGON_MAINNET_RPC_URL
+  : "https://polygon-bor-rpc.publicnode.com";
 const polygonAccounts = process.env.MAINNET_DEPLOYER_PRIVATE_KEY ? [process.env.MAINNET_DEPLOYER_PRIVATE_KEY] : [];
 
 const config: HardhatUserConfig = {
