@@ -1,6 +1,7 @@
 import { ethers } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
+import { getPolygonGasOverrides } from "./checkGasPrice";
 
 const KNOWN_DEMO_ADDRESSES = [
   "0xb30F2eFBCEBC529d946e05C9ccE0f1ffFB7e1aB1", // Demo Admin 3 wallet
@@ -83,17 +84,17 @@ export async function bootstrapRoles(): Promise<boolean> {
   const TREASURY_ADMIN_ROLE = await factory.TREASURY_ADMIN_ROLE();
   const DEFAULT_ADMIN_ROLE = await factory.DEFAULT_ADMIN_ROLE();
 
-  let tx = await factory.grantRole(ARBITRATOR_ROLE, YOUR_WALLET);
+  let tx = await factory.grantRole(ARBITRATOR_ROLE, YOUR_WALLET, await getPolygonGasOverrides(network));
   await tx.wait();
-  tx = await factory.grantRole(ARBITRATOR_ROLE, TEAM_MEMBER_WALLET);
+  tx = await factory.grantRole(ARBITRATOR_ROLE, TEAM_MEMBER_WALLET, await getPolygonGasOverrides(network));
   await tx.wait();
 
   if (ADMIN_3_WALLET) {
-    tx = await factory.grantRole(ARBITRATOR_ROLE, ADMIN_3_WALLET);
+    tx = await factory.grantRole(ARBITRATOR_ROLE, ADMIN_3_WALLET, await getPolygonGasOverrides(network));
     await tx.wait();
-    tx = await factory.grantRole(TREASURY_ADMIN_ROLE, ADMIN_3_WALLET);
+    tx = await factory.grantRole(TREASURY_ADMIN_ROLE, ADMIN_3_WALLET, await getPolygonGasOverrides(network));
     await tx.wait();
-    tx = await factory.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_3_WALLET);
+    tx = await factory.grantRole(DEFAULT_ADMIN_ROLE, ADMIN_3_WALLET, await getPolygonGasOverrides(network));
     await tx.wait();
     console.log("    ✓ Judge 1, Judge 2, and Judge 3 granted ARBITRATOR_ROLE & Admin access");
   } else {
@@ -102,14 +103,14 @@ export async function bootstrapRoles(): Promise<boolean> {
 
   // ── 2. Grant TREASURY_ADMIN_ROLE to the Safe ──
   console.log("2/5 Granting TREASURY_ADMIN_ROLE to Safe...");
-  tx = await factory.grantRole(TREASURY_ADMIN_ROLE, TREASURY_SAFE_ADDRESS);
+  tx = await factory.grantRole(TREASURY_ADMIN_ROLE, TREASURY_SAFE_ADDRESS, await getPolygonGasOverrides(network));
   await tx.wait();
   console.log("    ✓ Treasury control granted to Safe:", TREASURY_SAFE_ADDRESS);
 
   // ── 3. Grant ORACLE_OPERATOR_ROLE for GitHub verification ──
   console.log("3/5 Granting ORACLE_OPERATOR_ROLE...");
   const ORACLE_OPERATOR_ROLE = await githubRegistry.ORACLE_OPERATOR_ROLE();
-  tx = await githubRegistry.grantRole(ORACLE_OPERATOR_ROLE, ORACLE_SIGNING_ADDRESS);
+  tx = await githubRegistry.grantRole(ORACLE_OPERATOR_ROLE, ORACLE_SIGNING_ADDRESS, await getPolygonGasOverrides(network));
   await tx.wait();
   console.log("    ✓ Oracle operator granted:", ORACLE_SIGNING_ADDRESS);
 
@@ -121,20 +122,20 @@ export async function bootstrapRoles(): Promise<boolean> {
   if (network === "amoy") {
     const isApproved = await factory.approvedPaymentTokens(AMOY_USDC);
     if (!isApproved) {
-      tx = await factory.setApprovedPaymentToken(AMOY_USDC, true);
+      tx = await factory.setApprovedPaymentToken(AMOY_USDC, true, await getPolygonGasOverrides(network));
       await tx.wait();
       console.log("    ✓ Amoy USDC approved as payment token:", AMOY_USDC);
     }
   } else if (network === "polygon") {
     const isUsdcApproved = await factory.approvedPaymentTokens(POLYGON_USDC);
     if (!isUsdcApproved) {
-      tx = await factory.setApprovedPaymentToken(POLYGON_USDC, true);
+      tx = await factory.setApprovedPaymentToken(POLYGON_USDC, true, await getPolygonGasOverrides(network));
       await tx.wait();
       console.log("    ✓ Polygon Mainnet native USDC approved as payment token:", POLYGON_USDC);
     }
     const isUsdtApproved = await factory.approvedPaymentTokens(POLYGON_USDT);
     if (!isUsdtApproved) {
-      tx = await factory.setApprovedPaymentToken(POLYGON_USDT, true);
+      tx = await factory.setApprovedPaymentToken(POLYGON_USDT, true, await getPolygonGasOverrides(network));
       await tx.wait();
       console.log("    ✓ Polygon Mainnet USDT approved as payment token:", POLYGON_USDT);
     }
@@ -170,7 +171,7 @@ export async function bootstrapRoles(): Promise<boolean> {
   const TRANSFER_ADMIN = process.env.TRANSFER_ADMIN_TO_SAFE === "true";
   if (TRANSFER_ADMIN) {
     console.log("5/5 Transferring DEFAULT_ADMIN_ROLE to Safe...");
-    tx = await factory.grantRole(DEFAULT_ADMIN_ROLE, TREASURY_SAFE_ADDRESS);
+    tx = await factory.grantRole(DEFAULT_ADMIN_ROLE, TREASURY_SAFE_ADDRESS, await getPolygonGasOverrides(network));
     await tx.wait();
 
     const safeHasAdmin = await factory.hasRole(DEFAULT_ADMIN_ROLE, TREASURY_SAFE_ADDRESS);
@@ -178,7 +179,7 @@ export async function bootstrapRoles(): Promise<boolean> {
       console.error("    f Safe does not have DEFAULT_ADMIN_ROLE after grant — NOT renouncing deployer's role.");
       throw new Error("Safe does not have DEFAULT_ADMIN_ROLE after grant.");
     }
-    tx = await factory.renounceRole(DEFAULT_ADMIN_ROLE, deployer.address);
+    tx = await factory.renounceRole(DEFAULT_ADMIN_ROLE, deployer.address, await getPolygonGasOverrides(network));
     await tx.wait();
     console.log("    ✓ DEFAULT_ADMIN_ROLE transferred to Safe, deployer renounced");
   } else {
