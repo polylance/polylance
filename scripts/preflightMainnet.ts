@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import * as dotenv from "dotenv";
+import { getPolygonGasOverrides } from "./checkGasPrice";
 
 dotenv.config();
 
@@ -149,8 +150,8 @@ async function runPreflight() {
 
   // 5. Gas Estimation & Deployment Budget Check
   try {
-    const { getPolygonGasOverrides } = await import("./checkGasPrice");
     const gasOverrides = await getPolygonGasOverrides("polygon");
+    const safeLowMaxFeeGwei = Number(ethers.formatUnits(gasOverrides.maxFeePerGas ?? 400000000000n, "gwei"));
     const measuredTotalGas = 13_012_487n; // Exact measured gas from compiled bytecode (7 contracts + bootstrap)
     const recommendedGasWithBuffer = 16_265_608n; // Measured gas + 25% safety buffer
     const estimatedCostWei = (gasOverrides.maxFeePerGas ?? 400000000000n) * measuredTotalGas;
