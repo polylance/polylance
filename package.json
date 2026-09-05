@@ -47,7 +47,6 @@
     "@xmtp/browser-sdk": "^7.0.0",
     "concurrently": "^9.1.2",
     "dotenv": "^17.4.2",
-    "pinata-web3": "^0.5.4",
     "viem": "^2.55.8"
   }
 }

@@ -38,8 +38,8 @@ This document is the single reference guide for setting up, configuring, compili
 7. **Verify Roles**
    - Confirm all role checks in the bootstrap output show `✓` before continuing.
 
-8. **Pinata IPFS Setup**
-   - Register at [pinata.cloud](https://pinata.cloud), generate a JWT, and set `PINATA_JWT` in `.env`.
+8. **Filebase IPFS Setup**
+   - Register at [filebase.com](https://filebase.com), get your IPFS API credentials, and set `FILEBASE_API_KEY` in `.env`.
 
 9. **AuditX SIEM Security Monitoring**
    - Register PolyLance as an AuditX client app to receive real-time webhook security alerts.

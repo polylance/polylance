@@ -171,7 +171,7 @@ export const TECH_SKILLS_DATABASE: TechSkill[] = [
   { id: 'decentralized-storage', name: 'Decentralized Storage', category: 'Blockchain & Web3', subcategory: 'Storage', aliases: ['IPFS', 'Arweave', 'Filecoin'] },
   { id: 'arweave', name: 'Arweave', category: 'Blockchain & Web3', subcategory: 'Permanent Storage', aliases: ['Permaweb', 'Bundlr', 'Irys'] },
   { id: 'filecoin', name: 'Filecoin', category: 'Blockchain & Web3', subcategory: 'Storage', aliases: ['FIL', 'FVM', 'Filecoin Virtual Machine'] },
-  { id: 'ipfs-pinning', name: 'IPFS Pinning', category: 'Blockchain & Web3', subcategory: 'Storage', aliases: ['Pinata', 'Web3.Storage', 'IPFS Cluster'] },
+  { id: 'ipfs-pinning', name: 'IPFS Pinning', category: 'Blockchain & Web3', subcategory: 'Storage', aliases: ['Filebase', 'Web3.Storage', 'IPFS Cluster'] },
   { id: 'the-graph-subgraphs', name: 'The Graph Subgraphs', category: 'Blockchain & Web3', subcategory: 'Indexing', aliases: ['The Graph', 'Subgraphs', 'Goldsky'] },
   { id: 'oracle-integration', name: 'Oracle Integration', category: 'Blockchain & Web3', subcategory: 'Data Feeds', aliases: ['Chainlink', 'Pyth Network', 'API3', 'RedStone'] },
   { id: 'flash-loans', name: 'Flash Loans', category: 'Blockchain & Web3', subcategory: 'DeFi', aliases: ['Aave Flash Loans', 'Uniswap Flash Swaps'] },

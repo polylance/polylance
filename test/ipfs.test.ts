@@ -4,7 +4,7 @@ import { uploadFile, uploadJSON, uploadMultiple } from "../lib/ipfs/upload";
 import { verifyWalletAuth, AUTH_CHALLENGE_MESSAGE } from "../lib/auth";
 import { fetchAndVerify } from "../lib/ipfs/verify";
 
-describe("IPFS Upload Service & Pinata Integration", function () {
+describe("IPFS Upload Service & Filebase Integration", function () {
   let wallet: any;
 
   beforeEach(async function () {
@@ -105,12 +105,24 @@ describe("IPFS Upload Service & Pinata Integration", function () {
   });
 
   describe("Content Verification Helper (lib/ipfs/verify.ts)", function () {
-    it("should construct proper gateway URL for fetching", async function () {
-      const testCid = "QmTestHash123456789";
+    it("should construct proper gateway URL for fetching and return parsed content", async function () {
+      const originalFetch = global.fetch;
+      let fetchedUrl = "";
+      global.fetch = (async (url: string | URL | Request) => {
+        fetchedUrl = url.toString();
+        return new Response(JSON.stringify({ test: "data" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as any;
+
       try {
-        await fetchAndVerify(testCid);
-      } catch (err: any) {
-        expect(err).to.exist;
+        const result = await fetchAndVerify("QmTestHash123456789");
+        expect(fetchedUrl).to.include("QmTestHash123456789");
+        expect(fetchedUrl).to.include("ipfs.filebase.io");
+        expect(result).to.deep.equal({ test: "data" });
+      } finally {
+        global.fetch = originalFetch;
       }
     });
   });
