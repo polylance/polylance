@@ -58,7 +58,7 @@ describe("JobFactory Core & Access Controls", function () {
     it("rejects mintReputationSBT called by a non-job address", async function () {
       await expect(
         factory.connect(attacker).mintReputationSBT(attacker.address, attacker.address)
-      ).to.be.revertedWith("Caller is not a registered job contract");
+      ).to.be.revertedWith("Only registered job contracts");
     });
 
     it("rejects a registered job contract minting for a DIFFERENT job address", async function () {
@@ -99,7 +99,7 @@ describe("JobFactory Core & Access Controls", function () {
     it("rejects collectFee called by a non-job address", async function () {
       await expect(
         factory.connect(attacker).collectFee(ethers.ZeroAddress, 0, { value: ethers.parseEther("1.0") })
-      ).to.be.revertedWith("Caller is not a registered job contract");
+      ).to.be.revertedWith("Only registered job contracts");
     });
   });
 

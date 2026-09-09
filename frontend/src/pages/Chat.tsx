@@ -9,7 +9,7 @@ import {
   Paperclip, Smile, MoreVertical, Copy, Shield, Download, AlertTriangle, ChevronRight, ChevronLeft, X, Zap, Trash2, Users,
   RotateCcw, UserPlus, PanelRightClose, PanelRightOpen, Info, TrendingUp, Calendar, RefreshCw
 } from 'lucide-react';
-import { truncateAddress } from '../utils/formatters';
+import { truncateAddress, formatWeb3ErrorMessage } from '../utils/formatters';
 import { JudgeRecord, JudgeMessage, DisputeReason } from '../types';
 import confetti from 'canvas-confetti';
 import { EmptyState } from '../components/UIStates';
@@ -486,32 +486,50 @@ export const Chat: React.FC = () => {
     );
   };
 
-  const handleFund = () => {
+  const handleFund = async () => {
     if (!activeJob) return;
-    fundJob(activeJob.id);
-    confetti({ particleCount: 75, spread: 60 });
-    sendChatMessage(
-      activeJob.id,
-      `💰 Escrow vault funded successfully. Budget of $${parseFloat(activeJob.amountUsdc).toLocaleString()} USDC is locked.`,
-      'Judge',
-      undefined,
-      activeApplicantAddr,
-      address
-    );
+    try {
+      await fundJob(activeJob.id);
+      confetti({ particleCount: 75, spread: 60 });
+      sendChatMessage(
+        activeJob.id,
+        `💰 Escrow vault funded successfully. Budget of $${parseFloat(activeJob.amountUsdc).toLocaleString()} USDC is locked.`,
+        'Judge',
+        undefined,
+        activeApplicantAddr,
+        address
+      );
+    } catch (err: any) {
+      console.error('Failed to fund escrow in chat:', err);
+      setAlertModalOptions({
+        title: 'Escrow Funding Failed',
+        message: formatWeb3ErrorMessage(err),
+        type: 'error',
+      });
+    }
   };
 
-  const handleRelease = () => {
+  const handleRelease = async () => {
     if (!activeJob) return;
-    releasePayment(activeJob.id);
-    confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 } });
-    sendChatMessage(
-      activeJob.id,
-      `🎉 Escrow Milestone approved. Funds released to Developer's wallet. SBT minted!`,
-      'Judge',
-      undefined,
-      activeApplicantAddr,
-      address
-    );
+    try {
+      await releasePayment(activeJob.id);
+      confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 } });
+      sendChatMessage(
+        activeJob.id,
+        `🎉 Escrow Milestone approved. Funds released to Developer's wallet. SBT minted!`,
+        'Judge',
+        undefined,
+        activeApplicantAddr,
+        address
+      );
+    } catch (err: any) {
+      console.error('Failed to release payment in chat:', err);
+      setAlertModalOptions({
+        title: 'Payment Release Failed',
+        message: formatWeb3ErrorMessage(err),
+        type: 'error',
+      });
+    }
   };
 
   const handleSubmitDeliverable = (e: React.FormEvent) => {
@@ -533,17 +551,7 @@ export const Chat: React.FC = () => {
 
   const handleRequestRevision = () => {
     if (!activeJob) return;
-    const note = prompt('Please explain what revisions are required:');
-    if (!note) return;
-    requestModifications(activeJob.id, note);
-    sendChatMessage(
-      activeJob.id,
-      `⚠️ Revision Request: Client requested code changes. Note: "${note}"`,
-      'Client',
-      undefined,
-      activeApplicantAddr,
-      address
-    );
+    setIsModificationModalOpen(true);
   };
 
   // Comprehensive Filters for Search
@@ -993,15 +1001,7 @@ export const Chat: React.FC = () => {
                   ) && (
                     <button
                       type="button"
-                      onClick={() => {
-                        const reason = prompt('State the dispute reason:');
-                        if (reason) {
-                          const targetId = activeJob ? activeJob.id : selectedJudgeAddr;
-                          if (targetId) {
-                            sendChatMessage(targetId, `⚠️ Dispute Raised: ${reason}`, 'Judge');
-                          }
-                        }
-                      }}
+                      onClick={() => setIsDisputeModalOpen(true)}
                       className="bg-rose-50/70 hover:bg-rose-100/70 border border-rose-300 text-rose-800 font-bold py-1 px-2.5 rounded-lg flex items-center justify-center gap-1 text-[10.5px] shadow-2xs transition-all cursor-pointer"
                     >
                       <AlertTriangle size={13} className="text-rose-600" />
@@ -2222,19 +2222,33 @@ export const Chat: React.FC = () => {
         />
       )}
 
-      {/* Raise Dispute Modal */}
-      {activeJob && (
-        <RaiseDisputeModal
-          isOpen={isDisputeModalOpen}
-          onClose={() => setIsDisputeModalOpen(false)}
-          job={activeJob}
-          userAddress={address || ''}
-          onRaiseDispute={(reason, evidenceText, ipfsCid) => {
-            raiseDispute(activeJob.id, reason as DisputeReason, evidenceText, ipfsCid, address || '');
-            sendChatMessage(activeJob.id, `⚖️ Case Escalated to DAO Arbitration Panel\n\nReason: ${reason}\nEvidence: ${evidenceText}${ipfsCid ? `\nIPFS CID: ${ipfsCid}` : ''}`, 'Judge');
-          }}
-        />
-      )}
+      {/* Raise Dispute / Issue Escalation Modal */}
+      <RaiseDisputeModal
+        isOpen={isDisputeModalOpen}
+        onClose={() => setIsDisputeModalOpen(false)}
+        job={activeJob}
+        jobs={jobs}
+        judge={activeJudge}
+        userAddress={address || ''}
+        onRaiseDispute={(reason, evidenceText, ipfsCid, targetJobId, desiredResolution) => {
+          const finalJob = (targetJobId && jobs.find((j) => j.id === targetJobId)) || activeJob;
+          if (finalJob) {
+            raiseDispute(finalJob.id, reason as DisputeReason, evidenceText, ipfsCid, address || '');
+          }
+
+          const resolutionLine = desiredResolution ? `\n• Desired Resolution: ${desiredResolution}` : '';
+          const jobLine = finalJob
+            ? `\n• Target Escrow: "${finalJob.title}" (#${finalJob.id.slice(0, 8)})`
+            : '\n• Scope: General Protocol Escalation';
+          const disputeMsg = `⚖️ FORMAL ISSUE ESCALATED TO DAO ARBITRATOR\n${jobLine}\n• Category: ${reason}${resolutionLine}\n• Case Statement: "${evidenceText}"${ipfsCid ? `\n• Evidence CID: ipfs://${ipfsCid}` : ''}\n• Status: Awaiting DAO Arbitration Review`;
+
+          if (chatTab === 'judges' && selectedJudgeAddr) {
+            sendJudgeChatMessage(selectedJudgeAddr, disputeMsg, isAdmin ? 'Admin' : 'Judge', address);
+          } else if (activeJob) {
+            sendChatMessage(activeJob.id, disputeMsg, 'Judge', undefined, activeApplicantAddr, address);
+          }
+        }}
+      />
 
       {/* Client Modification / Revision Request Modal */}
       {activeJob && isModificationModalOpen && (

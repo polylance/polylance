@@ -31,11 +31,11 @@ describe("EIP-1167 clone storage isolation", function () {
 
   it("implementation contract itself cannot be re-initialized directly once initialized", async function () {
     // Initializing the implementation once succeeds (or reverts if constructor/initialization logic locks it)
-    await jobImpl.initialize(clientA.address, "ipfs://impl-test", 604800, ethers.ZeroAddress);
+    await jobImpl["initialize(address,string,uint256,address)"](clientA.address, "ipfs://impl-test", 604800, ethers.ZeroAddress);
 
     // Second initialization on implementation must revert
     await expect(
-      jobImpl.initialize(clientB.address, "ipfs://impl-reinit", 604800, ethers.ZeroAddress)
+      jobImpl["initialize(address,string,uint256,address)"](clientB.address, "ipfs://impl-reinit", 604800, ethers.ZeroAddress)
     ).to.be.revertedWithCustomError(jobImpl, "InvalidInitialization");
   });
 

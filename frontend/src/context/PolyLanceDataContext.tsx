@@ -43,6 +43,8 @@ export const getBackendSyncUrl = (): string => {
 
 
 let syncSocket: Socket | null = null;
+let backendSyncOfflineUntil = 0;
+let socketConnectFailures = 0;
 
 
 const defaultJudgeAddr = (import.meta.env.VITE_JUDGE_ADDRESS || '').toLowerCase();
@@ -131,6 +133,8 @@ const MOCK_NAMES_TO_PURGE = new Set([
   'nadia chen',
   'devpioneer'
 ]);
+
+let localJobNonceSeq = 1;
 
 const normalizeProfiles = (rawProfiles: Record<string, UserProfile>): Record<string, UserProfile> => {
   const normalized: Record<string, UserProfile> = {};
@@ -262,12 +266,19 @@ const broadcastSync = (data: {
   } catch (err) {}
 
   // 3. Multi-Endpoint Dual Write to Cloud Databases (Render PostgreSQL)
-  const endpoints = getSyncEndpoints();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (activeAddr) {
-    headers['x-wallet-address'] = activeAddr;
+  if (!activeAddr || !ethers.isAddress(activeAddr)) {
+    return;
   }
-  const query = activeAddr ? `?address=${encodeURIComponent(activeAddr)}` : '';
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return;
+  }
+
+  const endpoints = getSyncEndpoints();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'x-wallet-address': activeAddr,
+  };
+  const query = `?address=${encodeURIComponent(activeAddr)}`;
   endpoints.forEach((ep) => {
     fetch(`${ep}/api/sync${query}`, {
       method: 'POST',
@@ -519,13 +530,14 @@ const mergeProfilesMap = (existing: Record<string, UserProfile>, incoming: Recor
 };
 
 export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { provider, getSigner, address } = useWeb3();
+  const { provider, getSigner, address, isConnected, isWrongNetwork, targetChainName, refreshBalances } = useWeb3();
 
   useEffect(() => {
+    setCurrentConnectedWalletAddress(address || '');
     if (address) {
-      setCurrentConnectedWalletAddress(address);
+      refreshBalances().catch(() => {});
     }
-  }, [address]);
+  }, [address, refreshBalances]);
 
 
 
@@ -760,17 +772,33 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     // Real-Time Cross-Device WebSocket Sync Setup
     try {
-      if (!syncSocket || !syncSocket.connected) {
+      const isOnline = typeof navigator === 'undefined' || navigator.onLine;
+      if (isOnline && Date.now() >= backendSyncOfflineUntil && (!syncSocket || !syncSocket.connected)) {
         syncSocket = socketIO(syncUrl, {
-          transports: ['polling', 'websocket'],
+          transports: ['websocket', 'polling'],
           reconnection: true,
-          reconnectionAttempts: 5,
-          reconnectionDelay: 2000,
-          timeout: 10000,
+          reconnectionAttempts: 3,
+          reconnectionDelay: 5000,
+          timeout: 8000,
         });
 
         syncSocket.on('connect_error', () => {
-          // Fallback seamlessly to background REST polling without noisy crashes
+          socketConnectFailures++;
+          if (socketConnectFailures >= 2) {
+            backendSyncOfflineUntil = Date.now() + 60000;
+            if (syncSocket) syncSocket.disconnect();
+            setTimeout(() => {
+              if (syncSocket && (typeof navigator === 'undefined' || navigator.onLine)) {
+                socketConnectFailures = 0;
+                syncSocket.connect();
+              }
+            }, 60000);
+          }
+        });
+
+        syncSocket.on('connect', () => {
+          socketConnectFailures = 0;
+          backendSyncOfflineUntil = 0;
         });
 
         syncSocket.on('realtime-sync', (payload: any) => {
@@ -801,69 +829,94 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('Real-time WebSocket sync initialization notice:', err);
     }
 
-    // Initial load from backend shared state + upload local items if new
-    const currentAddr = (address || currentConnectedWalletAddress || '').toLowerCase().trim();
-    const initHeaders: Record<string, string> = {};
-    if (currentAddr) {
-      initHeaders['x-wallet-address'] = currentAddr;
-    }
-    const initQuery = currentAddr ? `?address=${encodeURIComponent(currentAddr)}` : '';
-    fetch(`${syncUrl}/api/sync${initQuery}`, { headers: initHeaders })
-      .then((r) => r.json())
-      .then((payload) => {
-        let currentLocalJobs: Job[] = [];
-        try {
-          const saved = localStorage.getItem('polylance_jobs');
-          if (saved) currentLocalJobs = JSON.parse(saved);
-        } catch {}
+    // Graceful Back-Forward Cache (bfcache) management
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted && syncSocket && !syncSocket.connected && (typeof navigator === 'undefined' || navigator.onLine)) {
+        syncSocket.connect();
+      }
+    };
+    const handlePageHide = () => {
+      if (syncSocket && syncSocket.connected) {
+        syncSocket.disconnect();
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('pagehide', handlePageHide);
 
-        if (payload) {
-          if (Array.isArray(payload.jobs) && payload.jobs.length > 0) {
-            setJobsRaw((curr) => {
-              const merged = mergeJobsList(curr, payload.jobs);
-              try { localStorage.setItem('polylance_jobs', JSON.stringify(merged)); } catch {}
-              return [...merged];
-            });
-            // If local had additional jobs, merge back to backend
-            if (currentLocalJobs.length > 0) {
+    // Initial load from backend shared state + upload local items if new
+    const isNetworkAvailable = typeof navigator === 'undefined' || (navigator.onLine && Date.now() >= backendSyncOfflineUntil);
+    if (isNetworkAvailable) {
+      const currentAddr = (address || currentConnectedWalletAddress || '').toLowerCase().trim();
+      const initHeaders: Record<string, string> = {};
+      if (currentAddr) {
+        initHeaders['x-wallet-address'] = currentAddr;
+      }
+      const initQuery = currentAddr ? `?address=${encodeURIComponent(currentAddr)}` : '';
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      fetch(`${syncUrl}/api/sync${initQuery}`, { headers: initHeaders, signal: controller.signal })
+        .then((r) => {
+          if (!r.ok) throw new Error(`Sync HTTP ${r.status}`);
+          return r.json();
+        })
+        .then((payload) => {
+          backendSyncOfflineUntil = 0;
+          let currentLocalJobs: Job[] = [];
+          try {
+            const saved = localStorage.getItem('polylance_jobs');
+            if (saved) currentLocalJobs = JSON.parse(saved);
+          } catch {}
+
+          if (payload) {
+            if (Array.isArray(payload.jobs) && payload.jobs.length > 0) {
+              setJobsRaw((curr) => {
+                const merged = mergeJobsList(curr, payload.jobs);
+                try { localStorage.setItem('polylance_jobs', JSON.stringify(merged)); } catch {}
+                return [...merged];
+              });
+              if (currentLocalJobs.length > 0) {
+                broadcastSync({ jobs: currentLocalJobs });
+              }
+            } else if (currentLocalJobs.length > 0) {
               broadcastSync({ jobs: currentLocalJobs });
             }
-          } else if (currentLocalJobs.length > 0) {
-            // Seed backend with existing local jobs
-            broadcastSync({ jobs: currentLocalJobs });
-          }
 
-          if (payload.profiles && Object.keys(payload.profiles).length > 0) {
-            setProfilesRaw((curr) => {
-              const merged = mergeProfilesMap(curr, payload.profiles);
-              try { localStorage.setItem('polylance_profiles', JSON.stringify(merged)); } catch {}
-              return { ...merged };
-            });
-          }
+            if (payload.profiles && Object.keys(payload.profiles).length > 0) {
+              setProfilesRaw((curr) => {
+                const merged = mergeProfilesMap(curr, payload.profiles);
+                try { localStorage.setItem('polylance_profiles', JSON.stringify(merged)); } catch {}
+                return { ...merged };
+              });
+            }
 
-          if (Array.isArray(payload.daoProposals) && payload.daoProposals.length > 0) {
-            setDaoProposalsRaw([...payload.daoProposals]);
-            try { localStorage.setItem('polylance_dao_proposals', JSON.stringify(payload.daoProposals)); } catch {}
+            if (Array.isArray(payload.daoProposals) && payload.daoProposals.length > 0) {
+              setDaoProposalsRaw([...payload.daoProposals]);
+              try { localStorage.setItem('polylance_dao_proposals', JSON.stringify(payload.daoProposals)); } catch {}
+            }
+            if (payload.judgeMessages && Object.keys(payload.judgeMessages).length > 0) {
+              setJudgeMessagesRaw({ ...payload.judgeMessages });
+              try { localStorage.setItem('polylance_judge_messages', JSON.stringify(payload.judgeMessages)); } catch {}
+            }
+            if (Array.isArray(payload.judges) && payload.judges.length > 0) {
+              setJudgesRaw([...payload.judges]);
+              try { localStorage.setItem('polylance_judges', JSON.stringify(payload.judges)); } catch {}
+            }
+            if (Array.isArray(payload.treasuryProposals) && payload.treasuryProposals.length > 0) {
+              setTreasuryProposalsRaw([...payload.treasuryProposals]);
+              try { localStorage.setItem('polylance_treasury_proposals', JSON.stringify(payload.treasuryProposals)); } catch {}
+            }
+            if (Array.isArray(payload.treasuryHistory) && payload.treasuryHistory.length > 0) {
+              setTreasuryHistoryRaw([...payload.treasuryHistory]);
+              try { localStorage.setItem('polylance_treasury_history', JSON.stringify(payload.treasuryHistory)); } catch {}
+            }
           }
-          if (payload.judgeMessages && Object.keys(payload.judgeMessages).length > 0) {
-            setJudgeMessagesRaw({ ...payload.judgeMessages });
-            try { localStorage.setItem('polylance_judge_messages', JSON.stringify(payload.judgeMessages)); } catch {}
-          }
-          if (Array.isArray(payload.judges) && payload.judges.length > 0) {
-            setJudgesRaw([...payload.judges]);
-            try { localStorage.setItem('polylance_judges', JSON.stringify(payload.judges)); } catch {}
-          }
-          if (Array.isArray(payload.treasuryProposals) && payload.treasuryProposals.length > 0) {
-            setTreasuryProposalsRaw([...payload.treasuryProposals]);
-            try { localStorage.setItem('polylance_treasury_proposals', JSON.stringify(payload.treasuryProposals)); } catch {}
-          }
-          if (Array.isArray(payload.treasuryHistory) && payload.treasuryHistory.length > 0) {
-            setTreasuryHistoryRaw([...payload.treasuryHistory]);
-            try { localStorage.setItem('polylance_treasury_history', JSON.stringify(payload.treasuryHistory)); } catch {}
-          }
-        }
-      })
-      .catch(() => {});
+        })
+        .catch(() => {
+          backendSyncOfflineUntil = Date.now() + 45000;
+        })
+        .finally(() => clearTimeout(timeoutId));
+    }
 
 
     const handleStorage = (e: StorageEvent) => {
@@ -1016,6 +1069,8 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     return () => {
       if (bc) bc.close();
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('pagehide', handlePageHide);
       window.removeEventListener('storage', handleStorage);
       clearInterval(pollInterval);
       window.removeEventListener('focus', syncFromStorage);
@@ -1026,13 +1081,23 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
   // Re-fetch scoped data securely when connected wallet changes
   useEffect(() => {
     if (!address) return;
+    const isNetworkAvailable = typeof navigator === 'undefined' || (navigator.onLine && Date.now() >= backendSyncOfflineUntil);
+    if (!isNetworkAvailable) return;
+
     const syncUrl = getBackendSyncUrl();
     const headers: Record<string, string> = { 'x-wallet-address': address.toLowerCase().trim() };
     const query = `?address=${encodeURIComponent(address.toLowerCase().trim())}`;
-    fetch(`${syncUrl}/api/sync${query}`, { headers })
-      .then((r) => r.json())
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    fetch(`${syncUrl}/api/sync${query}`, { headers, signal: controller.signal })
+      .then((r) => {
+        if (!r.ok) throw new Error(`Sync HTTP ${r.status}`);
+        return r.json();
+      })
       .then((payload) => {
         if (!payload) return;
+        backendSyncOfflineUntil = 0;
         if (Array.isArray(payload.jobs) && payload.jobs.length > 0) {
           setJobsRaw((curr) => {
             const merged = mergeJobsList(curr, payload.jobs);
@@ -1048,82 +1113,136 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           });
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        backendSyncOfflineUntil = Date.now() + 45000;
+      })
+      .finally(() => clearTimeout(timeoutId));
   }, [address]);
 
   const [loading, setLoading] = useState(false);
 
   const getAbi = (imported: any) => (Array.isArray(imported) ? imported : imported.abi ?? imported);
 
-  // 1. Sync on-chain jobs
+  // 1. Sync on-chain jobs directly from JobFactory and escrow clones
   const syncOnChainJobs = useCallback(async () => {
-    if (!provider) return;
+    if (!provider || !CONTRACTS.JobFactory || CONTRACTS.JobFactory === ethers.ZeroAddress) return;
     try {
+      // Verify that JobFactory contract code exists on current connected network
+      const code = await provider.getCode(CONTRACTS.JobFactory).catch(() => '0x');
+      if (!code || code === '0x' || code === '0x0') {
+        return;
+      }
+
       const factory = new ethers.Contract(CONTRACTS.JobFactory, getAbi(JobFactoryABI), provider);
-      if (!factory.filters || typeof factory.filters.JobPosted !== 'function') return;
-      const filter = factory.filters.JobPosted();
-      const logs = await factory.queryFilter(filter);
+      
+      // Query all deployed jobs directly from the factory contract
+      let deployedAddrs: string[] = [];
+      try {
+        if (typeof factory.getAllJobs === 'function') {
+          deployedAddrs = await factory.getAllJobs();
+        }
+      } catch (e: any) {
+        // Silently skip if contract interface mismatch or empty return (BAD_DATA)
+        if (e?.code !== 'BAD_DATA' && !e?.message?.includes('could not decode result data')) {
+          console.debug('factory.getAllJobs() notice, falling back to event scan:', e);
+        }
+      }
 
-      const parsedJobs: Job[] = await Promise.all(
-        logs.map(async (log: any) => {
-          const jobAddr = log.args[0] || log.args.jobAddress;
-          const client = log.args[1] || log.args.client;
-          const paymentToken = log.args[3] || log.args.paymentToken || ethers.ZeroAddress;
+      // If getAllJobs returned empty, query JobDeployed events
+      if (deployedAddrs.length === 0 && factory.filters && typeof factory.filters.JobDeployed === 'function') {
+        const filter = factory.filters.JobDeployed();
+        const logs = await factory.queryFilter(filter).catch(() => []);
+        deployedAddrs = logs.map((l: any) => l.args?.[0] || l.args?.jobContract).filter(Boolean);
+      }
 
-          const escrow = new ethers.Contract(jobAddr, getAbi(JobEscrowABI), provider);
-          const [statusRaw, freelancer, amountRaw, reviewPeriod, submittedAt, termsHash] = await Promise.all([
-            escrow.status().catch(() => 0n),
-            escrow.freelancer().catch(() => ethers.ZeroAddress),
-            escrow.amount().catch(() => 0n),
-            escrow.reviewPeriod().catch(() => 7n * 86400n),
-            escrow.submittedAt().catch(() => 0n),
-            escrow.termsHash().catch(() => ''),
-          ]);
+      if (deployedAddrs.length === 0) return;
 
-          const statusMap: JobStatus[] = ['Open', 'Selected', 'Submitted', 'Disputed', 'Completed', 'Cancelled'];
-          const status = statusMap[Number(statusRaw)] || 'Open';
+      const parsedJobs: Job[] = (
+        await Promise.all(
+          deployedAddrs.map(async (jobAddr: string) => {
+            if (!jobAddr || !ethers.isAddress(jobAddr)) return null;
+            try {
+              const escrow = new ethers.Contract(jobAddr, getAbi(JobEscrowABI), provider);
+              const [client, statusRaw, freelancer, amountRaw, reviewPeriod, submittedAt, termsHash, paymentToken] = await Promise.all([
+                escrow.client().catch(() => ethers.ZeroAddress),
+                escrow.status().catch(() => 0n),
+                escrow.freelancer().catch(() => ethers.ZeroAddress),
+                escrow.amount().catch(() => 0n),
+                escrow.reviewPeriod().catch(() => 7n * 86400n),
+                escrow.submittedAt().catch(() => 0n),
+                escrow.termsHash().catch(() => ''),
+                escrow.paymentToken().catch(() => ethers.ZeroAddress),
+              ]);
 
-          const tokenConfig = getTokenByAddress(paymentToken);
-          const formattedAmount = ethers.formatUnits(amountRaw, tokenConfig.decimals);
+              if (!client || client === ethers.ZeroAddress) return null;
 
-          return {
-            id: jobAddr.slice(0, 14),
-            contractAddress: jobAddr,
-            client,
-            freelancer: freelancer === ethers.ZeroAddress ? undefined : freelancer,
-            amountEth: tokenConfig.symbol === 'MATIC' ? formattedAmount : (parseFloat(formattedAmount) / 2800).toFixed(4),
-            amountUsdc: formattedAmount,
-            paymentToken,
-            paymentTokenSymbol: tokenConfig.symbol,
-            paymentTokenDecimals: tokenConfig.decimals,
-            status,
-            title: `Job ${jobAddr.slice(0, 6)}...${jobAddr.slice(-4)}`,
-            description: `On-chain JobEscrow clone deployed at ${jobAddr}`,
-            category: 'web3',
-            reviewPeriodDays: Math.round(Number(reviewPeriod) / 86400) || 7,
-            createdAt: Date.now() - 3600000,
-            submittedAt: Number(submittedAt) > 0 ? Number(submittedAt) * 1000 : undefined,
-            termsHash: termsHash || undefined,
-            applications: [],
-            events: [
-              { step: 'Posted', title: `Job Posted (${tokenConfig.symbol} Escrow)`, timestamp: Date.now() - 3600000, txHash: log.transactionHash, status: 'completed', actor: 'Client' },
-              { step: 'Funded', title: 'Fund Escrow', timestamp: Number(amountRaw) > 0 ? Date.now() - 1800000 : 0, txHash: '', status: Number(amountRaw) > 0 ? 'completed' : 'pending' },
-            ],
-          };
-        })
-      );
+              const statusMap: JobStatus[] = ['Open', 'Selected', 'Submitted', 'Disputed', 'Completed', 'Cancelled'];
+              let status = statusMap[Number(statusRaw)] || 'Open';
+              if (status === 'Selected' && Number(amountRaw) > 0) {
+                status = 'Funded';
+              }
+
+              const tokenConfig = getTokenByAddress(paymentToken);
+              const formattedAmount = ethers.formatUnits(amountRaw, tokenConfig.decimals);
+
+              // Preserve any existing local metadata (title, description, category, proposals)
+              const existingMatch = jobs.find(
+                (j) => j.id?.toLowerCase() === jobAddr.slice(0, 14).toLowerCase() ||
+                       j.contractAddress?.toLowerCase() === jobAddr.toLowerCase()
+              );
+
+              return {
+                id: existingMatch?.id || jobAddr.slice(0, 14),
+                contractAddress: jobAddr,
+                client,
+                freelancer: freelancer === ethers.ZeroAddress ? undefined : freelancer,
+                amountEth: tokenConfig.symbol === 'MATIC' || (tokenConfig.symbol as string) === 'POL' 
+                  ? formattedAmount 
+                  : (parseFloat(formattedAmount) / 2800).toFixed(4),
+                amountUsdc: formattedAmount,
+                paymentToken,
+                paymentTokenSymbol: tokenConfig.symbol,
+                paymentTokenDecimals: tokenConfig.decimals,
+                status,
+                title: existingMatch?.title || `Smart Contract Escrow ${jobAddr.slice(0, 6)}...${jobAddr.slice(-4)}`,
+                description: existingMatch?.description || `Decentralized JobEscrow verified on Polygon. Escrow contract: ${jobAddr}`,
+                category: existingMatch?.category || 'web3',
+                reviewPeriodDays: Math.round(Number(reviewPeriod) / 86400) || 7,
+                createdAt: existingMatch?.createdAt || Date.now() - 3600000,
+                submittedAt: Number(submittedAt) > 0 ? Number(submittedAt) * 1000 : existingMatch?.submittedAt,
+                termsHash: termsHash || existingMatch?.termsHash,
+                applications: existingMatch?.applications || [],
+                events: existingMatch?.events || [
+                  { step: 'Posted', title: `Job Posted (${tokenConfig.symbol} Escrow)`, timestamp: Date.now() - 3600000, txHash: '', status: 'completed', actor: 'Client' },
+                  { step: 'Funded', title: 'Fund Escrow', timestamp: Number(amountRaw) > 0 ? Date.now() - 1800000 : 0, txHash: '', status: Number(amountRaw) > 0 ? 'completed' : 'pending' },
+                ],
+              } as Job;
+            } catch (err) {
+              return null;
+            }
+          })
+        )
+      ).filter((j): j is Job => j !== null);
 
       if (parsedJobs.length > 0) {
-        setJobs((prev) => mergeJobsList(parsedJobs, prev));
+        setJobsRaw((prev) => {
+          const merged = mergeJobsList(prev, parsedJobs);
+          try {
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('polylance_jobs', JSON.stringify(merged));
+            }
+          } catch {}
+          return [...merged];
+        });
       }
     } catch (err) {
       console.warn('Real-time on-chain job sync warning:', err);
     }
-  }, [provider]);
+  }, [provider, jobs]);
 
   useEffect(() => {
     syncOnChainJobs();
-    const interval = setInterval(syncOnChainJobs, 30000);
+    const interval = setInterval(syncOnChainJobs, 20000);
     return () => clearInterval(interval);
   }, [syncOnChainJobs]);
 
@@ -1153,25 +1272,35 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     let contractAddr = '';
     let txHash = '';
 
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to deploy this escrow job.`);
+    }
+
     try {
       const signer = await getSigner();
       if (signer) {
-        const factory = new ethers.Contract(CONTRACTS.JobFactory, getAbi(JobFactoryABI), signer);
-        const tx = await factory.postJob(descriptionIpfsHash, tokenConfig.address);
-        const receipt = await tx.wait();
-        txHash = receipt.hash;
-        const log = receipt.logs.find((l: any) => l.fragment && l.fragment.name === 'JobPosted');
-        if (log) {
-          contractAddr = log.args[0] || log.args.jobAddress;
+        const code = await provider.getCode(CONTRACTS.JobFactory).catch(() => '0x');
+        if (code && code !== '0x') {
+          const factory = new ethers.Contract(CONTRACTS.JobFactory, getAbi(JobFactoryABI), signer);
+          const tx = await factory.postJob(descriptionIpfsHash, tokenConfig.address);
+          const receipt = await tx.wait();
+          txHash = receipt.hash;
+          const log = receipt.logs.find((l: any) => l.fragment && (l.fragment.name === 'JobDeployed' || l.fragment.name === 'JobPosted'));
+          if (log) {
+            contractAddr = log.args[0] || log.args.jobContract || log.args.jobAddress;
+          }
         }
       }
-    } catch (err) {
-      console.warn('Real contract postJob fallback to deterministic calculation:', err);
+    } catch (err: any) {
+      console.error('Real contract postJob error:', err);
+      if (isConnected) {
+        throw err;
+      }
     }
 
     if (!contractAddr) {
       const validFrom = (clientAddress && ethers.isAddress(clientAddress)) ? clientAddress : ethers.ZeroAddress;
-      const nonceVal = Math.floor(Date.now() % 1000000) + jobs.length + 1;
+      const nonceVal = (Date.now() % 1000000) * 1000 + (localJobNonceSeq++) + jobs.length;
       try {
         contractAddr = ethers.getCreateAddress({ from: validFrom, nonce: nonceVal });
       } catch {
@@ -1269,13 +1398,35 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     githubVerified: boolean,
     githubScore: number
   ) => {
+    const job = jobs.find((j) => matchJob(j, jobId));
     const proposalCid = generateIpfsCid({ proposalText, applicantAddress, timestamp: Date.now() });
 
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to apply.`);
+    }
+
+    try {
+      const signer = await getSigner();
+      if (signer && job && ethers.isAddress(job.contractAddress)) {
+        const code = await provider.getCode(job.contractAddress).catch(() => '0x');
+        if (code && code !== '0x') {
+          const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
+          const tx = await escrow.applyToJob(proposalCid);
+          await tx.wait();
+        }
+      }
+    } catch (err: any) {
+      console.warn('Real contract applyToJob notice:', err);
+      if (isConnected) {
+        throw err;
+      }
+    }
+
     setJobs((prev) =>
-      prev.map((job) => {
-        if (!matchJob(job, jobId)) return job;
-        const exists = (job.applications || []).some((a) => a.applicant.toLowerCase() === applicantAddress.toLowerCase());
-        if (exists) return job;
+      prev.map((j) => {
+        if (!matchJob(j, jobId)) return j;
+        const exists = (j.applications || []).some((a) => a.applicant.toLowerCase() === applicantAddress.toLowerCase());
+        if (exists) return j;
 
         const newApp: Application = {
           applicant: applicantAddress,
@@ -1287,8 +1438,8 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
           githubScore,
         };
         return {
-          ...job,
-          applications: [newApp, ...(job.applications || [])],
+          ...j,
+          applications: [newApp, ...(j.applications || [])],
         };
       })
     );
@@ -1297,16 +1448,27 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const selectFreelancer = async (jobId: string, freelancerAddress: string) => {
     let txHash = '';
     const job = jobs.find((j) => matchJob(j, jobId));
+
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to select candidate.`);
+    }
+
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
-        const tx = await escrow.selectFreelancer(freelancerAddress);
-        const receipt = await tx.wait();
-        txHash = receipt.hash;
+        const code = await provider.getCode(job.contractAddress).catch(() => '0x');
+        if (code && code !== '0x') {
+          const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
+          const tx = await escrow.selectFreelancer(freelancerAddress);
+          const receipt = await tx.wait();
+          txHash = receipt.hash;
+        }
       }
-    } catch (err) {
-      console.warn('Real contract selectFreelancer fallback:', err);
+    } catch (err: any) {
+      console.error('Real contract selectFreelancer error:', err);
+      if (isConnected) {
+        throw err;
+      }
     }
     if (!txHash) {
       txHash = generateMockTxHash();
@@ -1335,16 +1497,28 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const proposeTerms = async (jobId: string, userAddress: string) => {
     let txHash = '';
     const job = jobs.find((j) => matchJob(j, jobId));
+
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to agree to terms.`);
+    }
+
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
-        const tx = await escrow.proposeTerms();
-        const receipt = await tx.wait();
-        txHash = receipt.hash;
+        const code = await provider.getCode(job.contractAddress).catch(() => '0x');
+        if (code && code !== '0x') {
+          const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
+          const termsHash = ethers.id(`${job.id}-${job.amountUsdc}-${job.reviewPeriodDays}`);
+          const tx = await escrow.proposeTerms(termsHash);
+          const receipt = await tx.wait();
+          txHash = receipt.hash;
+        }
       }
-    } catch (err) {
-      console.warn('Real contract proposeTerms fallback:', err);
+    } catch (err: any) {
+      console.warn('Real contract proposeTerms notice:', err);
+      if (isConnected) {
+        throw err;
+      }
     }
 
     setJobs((prev) =>
@@ -1379,36 +1553,56 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const fundJob = async (jobId: string) => {
     let txHash = '';
     const job = jobs.find((j) => matchJob(j, jobId));
+
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to fund this escrow.`);
+    }
+
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
-        const tokenConfig = getTokenByAddress(job.paymentToken);
+        // Check if contract is deployed on chain
+        const deployedCode = await provider.getCode(job.contractAddress).catch(() => '0x');
+        const hasLiveContract = deployedCode && deployedCode !== '0x';
 
-        if (job.paymentToken === ethers.ZeroAddress || tokenConfig.symbol === 'MATIC') {
-          const val = ethers.parseUnits(job.amountEth || job.amountUsdc || '0.01', 18);
-          const tx = await (escrow['fundJob()'] ? escrow['fundJob()']({ value: val }) : escrow.fundJob({ value: val }));
-          const receipt = await tx.wait();
-          txHash = receipt.hash;
-        } else {
-          const erc20Abi = [
-            'function approve(address spender, uint256 amount) external returns (bool)',
-            'function allowance(address owner, address spender) external view returns (uint256)',
-          ];
-          const tokenContract = new ethers.Contract(job.paymentToken, erc20Abi, signer);
-          const amountParsed = ethers.parseUnits(job.amountUsdc || '100', tokenConfig.decimals);
+        if (hasLiveContract) {
+          const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
+          const tokenConfig = getTokenByAddress(job.paymentToken);
 
-          const approveTx = await tokenContract.approve(job.contractAddress, amountParsed);
-          await approveTx.wait();
+          if (job.paymentToken === ethers.ZeroAddress || tokenConfig.symbol === 'MATIC') {
+            const val = ethers.parseUnits(job.amountEth || job.amountUsdc || '0.01', 18);
+            const tx = await escrow.fundJob(0, { value: val });
+            const receipt = await tx.wait();
+            txHash = receipt.hash;
+          } else {
+            const erc20Abi = [
+              'function approve(address spender, uint256 amount) external returns (bool)',
+              'function allowance(address owner, address spender) external view returns (uint256)',
+            ];
+            const tokenContract = new ethers.Contract(job.paymentToken, erc20Abi, signer);
+            const amountParsed = ethers.parseUnits(job.amountUsdc || '100', tokenConfig.decimals);
 
-          const fundTx = await (escrow['fundJob(uint256)'] ? escrow['fundJob(uint256)'](amountParsed) : escrow.fundJob(amountParsed));
-          const receipt = await fundTx.wait();
-          txHash = receipt.hash;
+            const signerAddr = await signer.getAddress();
+            const currentAllowance: bigint = await tokenContract.allowance(signerAddr, job.contractAddress).catch(() => 0n);
+            if (currentAllowance < amountParsed) {
+              const approveTx = await tokenContract.approve(job.contractAddress, amountParsed);
+              await approveTx.wait();
+            }
+
+            const fundTx = await escrow.fundJob(amountParsed);
+            const receipt = await fundTx.wait();
+            txHash = receipt.hash;
+          }
         }
       }
-    } catch (err) {
-      console.warn('Real contract fundJob fallback:', err);
+    } catch (err: any) {
+      console.error('Escrow funding error:', err);
+      // Re-throw if a real live wallet was attempting transaction on chain
+      if (isConnected) {
+        throw err;
+      }
     }
+
     if (!txHash) {
       txHash = generateMockTxHash();
     }
@@ -1430,6 +1624,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       })
     );
+    refreshBalances().catch(() => {});
   };
 
   const submitWork = async (
@@ -1442,16 +1637,35 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
   ) => {
     let txHash = '';
     const job = jobs.find((j) => matchJob(j, jobId));
+
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to submit deliverables.`);
+    }
+
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
-        const tx = await escrow.submitWork(evidenceHashes);
-        const receipt = await tx.wait();
-        txHash = receipt.hash;
+        const deployedCode = await provider.getCode(job.contractAddress).catch(() => '0x');
+        const hasLiveContract = deployedCode && deployedCode !== '0x';
+        if (hasLiveContract) {
+          const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
+          const safeHashes = (evidenceHashes && evidenceHashes.length > 0)
+            ? evidenceHashes
+            : [generateIpfsCid({ title, description, timestamp: Date.now() })];
+          const tx = await escrow.submitWork(
+            title || 'Completed Deliverables',
+            description || 'Work delivered as per specification',
+            safeHashes
+          );
+          const receipt = await tx.wait();
+          txHash = receipt.hash;
+        }
       }
-    } catch (err) {
-      console.warn('Real contract submitWork fallback:', err);
+    } catch (err: any) {
+      console.error('Real contract submitWork error:', err);
+      if (isConnected) {
+        throw err;
+      }
     }
     if (!txHash) {
       txHash = generateMockTxHash();
@@ -1716,16 +1930,28 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     let sbtTxHash = '';
     const job = jobs.find((j) => matchJob(j, jobId));
 
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to release escrow payment.`);
+    }
+
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
-        const tx = await escrow.releasePayment();
-        const receipt = await tx.wait();
-        txHash = receipt.hash;
+        const deployedCode = await provider.getCode(job.contractAddress).catch(() => '0x');
+        const hasLiveContract = deployedCode && deployedCode !== '0x';
+
+        if (hasLiveContract) {
+          const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
+          const tx = await escrow.releasePayment();
+          const receipt = await tx.wait();
+          txHash = receipt.hash;
+        }
       }
-    } catch (err) {
-      console.warn('Real contract releasePayment fallback:', err);
+    } catch (err: any) {
+      console.error('Real contract releasePayment error:', err);
+      if (isConnected) {
+        throw err;
+      }
     }
 
     if (!txHash) txHash = generateMockTxHash();
@@ -1771,6 +1997,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       })
     );
+    refreshBalances().catch(() => {});
   };
 
   const claimAutoRelease = async (jobId: string) => {
@@ -1847,17 +2074,29 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
     let sbtTxHash = '';
     const job = jobs.find((j) => matchJob(j, jobId));
 
+    if (isConnected && isWrongNetwork) {
+      throw new Error(`Wrong network detected. Please switch wallet to ${targetChainName} to execute dispute resolution.`);
+    }
+
     try {
       const signer = await getSigner();
       if (signer && job && ethers.isAddress(job.contractAddress)) {
-        const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
-        const reasoningCid = generateIpfsCid(reasoningText);
-        const tx = await escrow.resolveDispute(freelancerBps, reasoningCid);
-        const receipt = await tx.wait();
-        txHash = receipt.hash;
+        const deployedCode = await provider.getCode(job.contractAddress).catch(() => '0x');
+        const hasLiveContract = deployedCode && deployedCode !== '0x';
+
+        if (hasLiveContract) {
+          const escrow = new ethers.Contract(job.contractAddress, getAbi(JobEscrowABI), signer);
+          const reasoningCid = generateIpfsCid(reasoningText);
+          const tx = await escrow.resolveDispute(freelancerBps, reasoningCid);
+          const receipt = await tx.wait();
+          txHash = receipt.hash;
+        }
       }
-    } catch (err) {
-      console.warn('Real contract resolveDispute fallback:', err);
+    } catch (err: any) {
+      console.error('Real contract resolveDispute error:', err);
+      if (isConnected) {
+        throw err;
+      }
     }
 
     if (!txHash) txHash = generateMockTxHash();
@@ -1916,6 +2155,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         };
       })
     );
+    refreshBalances().catch(() => {});
   };
 
   const updateJobTerms = async (jobId: string, newAmountUsdc: string, newReviewPeriodDays?: number) => {

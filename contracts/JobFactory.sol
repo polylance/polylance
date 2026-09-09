@@ -3,19 +3,20 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/proxy/Clones.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IReputationSBT.sol";
 import "./JobEscrow.sol";
 
-contract JobFactory is AccessControl {
+contract JobFactory is AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes32 public constant ARBITRATOR_ROLE = keccak256("ARBITRATOR_ROLE");
     bytes32 public constant TREASURY_ADMIN_ROLE = keccak256("TREASURY_ADMIN_ROLE");
 
     address public immutable jobImplementation;
-    IReputationSBT public reputationSBT;
+    IReputationSBT public immutable reputationSBT;
     address[] public allJobs;
     mapping(address => bool) public isJob;
     mapping(address => bool) public approvedPaymentTokens; // address(0) = native MATIC, implicitly approved
@@ -28,7 +29,8 @@ contract JobFactory is AccessControl {
     event TreasuryWithdrawal(address indexed to, address indexed token, uint256 amount, address indexed by);
 
     constructor(address _jobImplementation, address _reputationSBT) {
-        require(_jobImplementation != address(0), "Implementation cannot be zero address");
+        require(_jobImplementation != address(0), "Zero implementation address");
+        require(_reputationSBT != address(0), "Zero SBT address");
         jobImplementation = _jobImplementation;
         reputationSBT = IReputationSBT(_reputationSBT);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -44,8 +46,8 @@ contract JobFactory is AccessControl {
         jobContract = Clones.clone(jobImplementation);
         isJob[jobContract] = true;
         allJobs.push(jobContract);
-        JobEscrow(jobContract).initialize(msg.sender, descriptionIpfsHash, DEFAULT_REVIEW_PERIOD, paymentToken);
         emit JobDeployed(jobContract, msg.sender, paymentToken);
+        JobEscrow(jobContract).initialize(msg.sender, descriptionIpfsHash, DEFAULT_REVIEW_PERIOD, paymentToken);
     }
 
     function getAllJobs() external view returns (address[] memory) {
@@ -61,8 +63,12 @@ contract JobFactory is AccessControl {
     }
 
     /// @notice Only callable by clone contracts created by this factory.
-    function collectFee(address token, uint256 feeAmount) external payable {
-        require(isJob[msg.sender], "Caller is not a registered job contract");
+    function collectFee() external payable {
+        collectFee(address(0), msg.value);
+    }
+
+    function collectFee(address token, uint256 feeAmount) public payable {
+        require(isJob[msg.sender], "Only registered job contracts");
         if (token == address(0)) {
             treasuryBalanceByToken[address(0)] += msg.value;
             emit FeeCollected(msg.sender, address(0), msg.value);
@@ -73,13 +79,14 @@ contract JobFactory is AccessControl {
     }
 
     function mintReputationSBT(address to, address jobContract) external {
-        require(isJob[msg.sender], "Caller is not a registered job contract");
+        require(isJob[msg.sender], "Only registered job contracts");
         require(jobContract == msg.sender, "Job contract must mint for itself");
         reputationSBT.mint(to, jobContract);
     }
 
-    function withdrawTreasury(address token, address to, uint256 amount) external onlyRole(TREASURY_ADMIN_ROLE) {
-        require(to != address(0), "Cannot withdraw to zero address");
+    // slither-disable-next-line arbitrary-send-eth
+    function withdrawTreasury(address token, address to, uint256 amount) external onlyRole(TREASURY_ADMIN_ROLE) nonReentrant {
+        require(to != address(0), "Invalid address");
         require(amount <= treasuryBalanceByToken[token], "Insufficient treasury balance");
         treasuryBalanceByToken[token] -= amount;
         if (token == address(0)) {

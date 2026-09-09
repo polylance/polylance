@@ -105,9 +105,13 @@ async function runPreflight() {
     try {
       const code = await provider.getCode(safeAddr);
       if (code === "0x") {
-        console.log(`⚠️ TREASURY_SAFE_ADDRESS: ${safeAddr} has NO bytecode on Polygon Mainnet.`);
-        console.log(`   Ensure this Safe is deployed on Polygon (Chain ID 137), not Ethereum or Arbitrum.`);
-        allOk = false;
+        if (process.env.ALLOW_EOA_TREASURY === "true") {
+          console.log(`⚠️ TREASURY_SAFE_ADDRESS: ${safeAddr} is an EOA (regular wallet), allowed because ALLOW_EOA_TREASURY=true.`);
+        } else {
+          console.log(`⚠️ TREASURY_SAFE_ADDRESS: ${safeAddr} has NO bytecode on Polygon Mainnet.`);
+          console.log(`   Ensure this Safe is deployed on Polygon (Chain ID 137), or set ALLOW_EOA_TREASURY=true for canary testing.`);
+          allOk = false;
+        }
       } else {
         console.log(`✓ TREASURY_SAFE_ADDRESS: ${safeAddr} (Verified deployed contract on Polygon)`);
       }

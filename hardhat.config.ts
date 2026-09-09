@@ -3,7 +3,7 @@ import "@nomicfoundation/hardhat-toolbox";
 import * as dotenv from "dotenv";
 import { Wallet } from "ethers";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const KNOWN_PUBLIC_TEST_KEYS = [
   "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", // Hardhat default account #0
@@ -51,28 +51,25 @@ function validateDeployerForRealNetwork(privateKey: string | undefined, networkN
   }
 }
 
-// Enforce guard when targeting non-local networks (e.g. amoy, polygon)
+// Enforce guard when targeting live networks
 if (process.argv.includes("--network") && !process.argv.includes("hardhat") && !process.argv.includes("localhost")) {
   const networkArgIndex = process.argv.indexOf("--network");
   const targetNetwork = process.argv[networkArgIndex + 1] ?? "real-network";
   const isPolygon = targetNetwork === "polygon";
   const keyToValidate = isPolygon 
-    ? process.env.MAINNET_DEPLOYER_PRIVATE_KEY 
+    ? (process.env.MAINNET_DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY)
     : process.env.PRIVATE_KEY;
-  const envVar = isPolygon ? "MAINNET_DEPLOYER_PRIVATE_KEY" : "PRIVATE_KEY";
+  const envVar = isPolygon && process.env.MAINNET_DEPLOYER_PRIVATE_KEY ? "MAINNET_DEPLOYER_PRIVATE_KEY" : "PRIVATE_KEY";
   validateDeployerForRealNetwork(keyToValidate, targetNetwork, envVar);
 }
 
-const AMOY_RPC_URL = process.env.AMOY_RPC_URL && process.env.AMOY_RPC_URL !== "https://rpc-amoy.polygon.technology"
-  ? process.env.AMOY_RPC_URL 
-  : "https://polygon-amoy-bor-rpc.publicnode.com";
+const AMOY_RPC_URL = process.env.AMOY_RPC_URL ?? "https://polygon-amoy-bor-rpc.publicnode.com";
+const POLYGON_MAINNET_RPC_URL = process.env.POLYGON_MAINNET_RPC_URL ?? "https://polygon-bor-rpc.publicnode.com";
 
 const amoyAccounts = process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [];
-
-const POLYGON_MAINNET_RPC_URL = process.env.POLYGON_MAINNET_RPC_URL && process.env.POLYGON_MAINNET_RPC_URL !== "https://polygon-rpc.com"
-  ? process.env.POLYGON_MAINNET_RPC_URL
-  : "https://polygon-bor-rpc.publicnode.com";
-const polygonAccounts = process.env.MAINNET_DEPLOYER_PRIVATE_KEY ? [process.env.MAINNET_DEPLOYER_PRIVATE_KEY] : [];
+const polygonAccounts = process.env.MAINNET_DEPLOYER_PRIVATE_KEY 
+  ? [process.env.MAINNET_DEPLOYER_PRIVATE_KEY] 
+  : (process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []);
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -117,3 +114,4 @@ const config: HardhatUserConfig = {
 };
 
 export default config;
+

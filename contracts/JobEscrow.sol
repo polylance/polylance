@@ -64,20 +64,20 @@ contract JobEscrow is Initializable, ReentrancyGuard {
     TimeExtensionRequest[] public extensionRequests;
     string[] public progressUpdateHashes; // append-only log of progress updates
 
-    event JobPosted(address client, string descriptionIpfsHash, address paymentToken);
-    event ApplicationSubmitted(address applicant);
-    event FreelancerSelected(address freelancer);
+    event JobPosted(address indexed client, string descriptionIpfsHash, address indexed paymentToken);
+    event ApplicationSubmitted(address indexed applicant);
+    event FreelancerSelected(address indexed freelancer);
     event SelectionDeclined();
-    event TermsProposed(address by, bytes32 termsHash);
+    event TermsProposed(address indexed by, bytes32 termsHash);
     event JobFunded(uint256 amount);
     event WorkSubmitted(string title, uint256 evidenceCount);
     event PaymentReleased(uint256 toFreelancer, uint256 fee);
     event AutoReleased();
     event JobCancelled(uint256 refund);
-    event CancelConsentGiven(address by);
-    event DisputeRaised(address by, DisputeReason reason, string evidenceIpfsHash);
-    event DisputeResponseSubmitted(address by, string responseIpfsHash);
-    event DisputeResolved(uint256 freelancerBps, address judge, string reasoningIpfsHash);
+    event CancelConsentGiven(address indexed by);
+    event DisputeRaised(address indexed by, DisputeReason reason, string evidenceIpfsHash);
+    event DisputeResponseSubmitted(address indexed by, string responseIpfsHash);
+    event DisputeResolved(uint256 freelancerBps, address indexed judge, string reasoningIpfsHash);
     event ProgressUpdatePosted(uint256 indexed jobId, string updateIpfsHash, uint256 timestamp);
     event TimeExtensionRequested(uint256 indexed requestIndex, uint256 requestedDays, string reasonIpfsHash);
     event TimeExtensionResponded(uint256 indexed requestIndex, bool approved);
@@ -91,10 +91,18 @@ contract JobEscrow is Initializable, ReentrancyGuard {
     function initialize(
         address _client,
         string calldata _descriptionIpfsHash,
+        uint256 _reviewPeriod
+    ) external initializer {
+        initialize(_client, _descriptionIpfsHash, _reviewPeriod, address(0));
+    }
+
+    function initialize(
+        address _client,
+        string calldata _descriptionIpfsHash,
         uint256 _reviewPeriod,
         address _paymentToken
-    ) external initializer {
-        require(_client != address(0), "Client cannot be zero address");
+    ) public initializer {
+        require(_client != address(0), "Invalid client address");
         factory = msg.sender;
         client = _client;
         descriptionIpfsHash = _descriptionIpfsHash;
@@ -104,7 +112,7 @@ contract JobEscrow is Initializable, ReentrancyGuard {
         emit JobPosted(_client, _descriptionIpfsHash, _paymentToken);
     }
 
-    // ── Funding — two distinct paths, same external behavior ──
+    // ── Funding — native MATIC or ERC-20 token ──
     function fundJob(uint256 tokenAmount) external payable nonReentrant {
         require(msg.sender == client, "Only client funds");
         require(status == JobStatus.Open || status == JobStatus.Selected, "Wrong status");
@@ -292,8 +300,10 @@ contract JobEscrow is Initializable, ReentrancyGuard {
 
     function _completeJob(uint256 freelancerBps) internal {
         status = JobStatus.Completed;
-        uint256 fee = (amount * PLATFORM_FEE_BPS) / 10000;
-        uint256 distributable = amount - fee;
+        uint256 totalAmount = amount;
+        amount = 0;
+        uint256 fee = (totalAmount * PLATFORM_FEE_BPS) / 10000;
+        uint256 distributable = totalAmount - fee;
         uint256 toFreelancer = (distributable * freelancerBps) / 10000;
         uint256 toClient = distributable - toFreelancer;
 

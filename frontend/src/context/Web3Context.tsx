@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { useAccount, useDisconnect } from 'wagmi';
+import { useAccount, useDisconnect, useChainId, useSwitchChain } from 'wagmi';
 import { useConnectModal } from '@rainbow-me/rainbowkit';
 import { ethers } from 'ethers';
-import { CONTRACTS, RPC_URL } from '../config/contracts';
+import { CONTRACTS, RPC_URL, CHAIN_ID, NETWORK_CONFIG } from '../config/contracts';
 import { DemoRole } from '../types';
 import JobFactoryABI from '../config/abis/JobFactory.json';
 import ReputationSBTABI from '../config/abis/ReputationSBT.json';
 import { detectPrivilegedRole, isAdminAddress, isJudgeAddress } from '../utils/adminGuard';
+
+import { PAYMENT_TOKENS } from '../config/paymentTokens';
 
 export const DEMO_WALLETS = {
   visitor: {
@@ -30,29 +32,21 @@ export const DEMO_WALLETS = {
     isTreasuryAdmin: false,
     reputationCount: 0,
   },
-  judge: {
-    address: import.meta.env.VITE_JUDGE_ADDRESS as string || '',
-    label: 'Judge / Arbitrator',
-    isArbitrator: true,
-    isTreasuryAdmin: false,
-    reputationCount: 0,
-  },
-  admin: {
-    // Primary admin demo address — loaded from env only, never hardcoded
-    address: import.meta.env.VITE_ADMIN_ADDRESS_2 as string || '',
-    label: 'Treasury Admin (Safe Multisig)',
-    isArbitrator: false,
-    isTreasuryAdmin: true,
-    reputationCount: 0,
-  },
 };
 
-interface Web3ContextType {
+export interface Web3ContextType {
   address: string;
   isConnected: boolean;
   isArbitrator: boolean;
   isTreasuryAdmin: boolean;
   reputationCount: number;
+  balanceNative: string;
+  balanceUsdc: string;
+  refreshBalances: () => Promise<void>;
+  isWrongNetwork: boolean;
+  targetChainId: number;
+  targetChainName: string;
+  switchToTargetNetwork: () => Promise<void>;
   loading: boolean;
   error: string | null;
   currentRole: DemoRole;
@@ -68,8 +62,50 @@ const Web3Context = createContext<Web3ContextType | undefined>(undefined);
 
 export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { address: walletAddress, isConnected: walletIsConnected } = useAccount();
+  const connectedChainId = useChainId();
+  const { switchChain } = useSwitchChain();
   const { disconnect } = useDisconnect();
   const { openConnectModal } = useConnectModal();
+
+  const isWrongNetwork = Boolean(
+    walletIsConnected && connectedChainId && connectedChainId !== CHAIN_ID
+  );
+
+  const switchToTargetNetwork = useCallback(async () => {
+    if (switchChain) {
+      try {
+        await switchChain({ chainId: CHAIN_ID });
+        return;
+      } catch (e: any) {
+        console.warn('Wagmi switchChain error, falling back to window.ethereum:', e);
+      }
+    }
+    if (typeof window !== 'undefined' && (window as any).ethereum) {
+      try {
+        await (window as any).ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: NETWORK_CONFIG.chainHex }],
+        });
+      } catch (switchError: any) {
+        if (switchError.code === 4902 || switchError?.data?.originalError?.code === 4902) {
+          await (window as any).ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [
+              {
+                chainId: NETWORK_CONFIG.chainHex,
+                chainName: NETWORK_CONFIG.chainName,
+                nativeCurrency: NETWORK_CONFIG.nativeCurrency,
+                rpcUrls: [NETWORK_CONFIG.rpcUrl],
+                blockExplorerUrls: NETWORK_CONFIG.blockExplorerUrl ? [NETWORK_CONFIG.blockExplorerUrl] : [],
+              },
+            ],
+          });
+        } else {
+          throw switchError;
+        }
+      }
+    }
+  }, [switchChain]);
 
   const [currentRole, setCurrentRole] = useState<DemoRole>(() => {
     if (typeof window !== 'undefined') {
@@ -82,13 +118,15 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isArbitrator, setIsArbitrator] = useState(false);
   const [isTreasuryAdmin, setIsTreasuryAdmin] = useState(false);
   const [reputationCount, setReputationCount] = useState(0);
+  const [balanceNative, setBalanceNative] = useState<string>('0.00');
+  const [balanceUsdc, setBalanceUsdc] = useState<string>('0.00');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const browserProviderRef = useRef<ethers.BrowserProvider | null>(null);
   const fallbackProviderRef = useRef<ethers.JsonRpcProvider | null>(null);
 
-  const getActiveProvider = (): ethers.Provider => {
+  const getActiveProvider = useCallback((): ethers.Provider => {
     if (typeof window !== 'undefined' && (window as any).ethereum) {
       if (!browserProviderRef.current) {
         if (typeof (window as any).ethereum.setMaxListeners === 'function') {
@@ -104,7 +142,7 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
       fallbackProviderRef.current = new ethers.JsonRpcProvider(RPC_URL);
     }
     return fallbackProviderRef.current;
-  };
+  }, []);
 
   const getAbi = (imported: any) => (Array.isArray(imported) ? imported : imported.abi ?? imported);
 
@@ -195,15 +233,99 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [getActiveProvider]);
+
+  const refreshBalances = useCallback(async (overrideAddress?: string) => {
+    const targetAddr = overrideAddress || (walletIsConnected ? walletAddress : '');
+    if (!targetAddr || !ethers.isAddress(targetAddr)) {
+      setBalanceNative('0.00');
+      setBalanceUsdc('0.00');
+      return;
+    }
+    try {
+      const p = getActiveProvider();
+      const balWei = await p.getBalance(targetAddr).catch(() => 0n);
+      setBalanceNative(parseFloat(ethers.formatEther(balWei)).toFixed(4));
+
+      const usdcAddress = PAYMENT_TOKENS.USDC.address;
+      if (usdcAddress && usdcAddress !== ethers.ZeroAddress) {
+        const usdcContract = new ethers.Contract(
+          usdcAddress,
+          ["function balanceOf(address) view returns (uint256)"],
+          p
+        );
+        const usdcRaw = await usdcContract.balanceOf(targetAddr).catch(() => 0n);
+        setBalanceUsdc(parseFloat(ethers.formatUnits(usdcRaw, PAYMENT_TOKENS.USDC.decimals)).toFixed(2));
+      }
+    } catch (e) {
+      console.warn("Failed to fetch wallet balances:", e);
+    }
+  }, [walletIsConnected, walletAddress, getActiveProvider]);
+
+  // Real-time polling for wallet balances
+  useEffect(() => {
+    refreshBalances();
+    const interval = setInterval(() => {
+      refreshBalances();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [refreshBalances]);
+
+  // MetaMask event subscription (accountsChanged, chainChanged)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !(window as any).ethereum) return;
+    const eth = (window as any).ethereum;
+
+    const handleAccountsChanged = (accounts: string[]) => {
+      browserProviderRef.current = null;
+      if (!accounts || accounts.length === 0) {
+        setBalanceNative('0.00');
+        setBalanceUsdc('0.00');
+        setIsArbitrator(false);
+        setIsTreasuryAdmin(false);
+        setReputationCount(0);
+        setCurrentRole('visitor');
+        if (typeof window !== 'undefined') localStorage.removeItem('polylance_demo_role');
+      } else {
+        const newAddress = accounts[0];
+        refreshBalances(newAddress);
+        loadRealOnChainState(newAddress);
+      }
+    };
+
+    const handleChainChanged = () => {
+      browserProviderRef.current = null;
+      refreshBalances();
+      if (walletAddress) {
+        loadRealOnChainState(walletAddress);
+      }
+    };
+
+    const removeListenerSafely = (event: string, handler: any) => {
+      try {
+        if (typeof eth.removeListener === 'function') {
+          eth.removeListener(event, handler);
+        } else if (typeof eth.off === 'function') {
+          eth.off(event, handler);
+        }
+      } catch {}
+    };
+
+    eth.on?.('accountsChanged', handleAccountsChanged);
+    eth.on?.('chainChanged', handleChainChanged);
+
+    return () => {
+      removeListenerSafely('accountsChanged', handleAccountsChanged);
+      removeListenerSafely('chainChanged', handleChainChanged);
+    };
+  }, [walletAddress, loadRealOnChainState, refreshBalances]);
 
   // Sync state between wallet connection and mock role settings
   useEffect(() => {
     if (walletIsConnected && walletAddress) {
       loadRealOnChainState(walletAddress);
     }
-    // When wallet disconnects, disconnectWallet() handles clearing state directly.
-    // We do NOT re-apply DEMO_WALLETS state here to avoid race conditions.
   }, [walletAddress, walletIsConnected, loadRealOnChainState]);
 
   const setRole = (role: DemoRole) => {
@@ -239,19 +361,17 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const getSigner = async (): Promise<ethers.Signer | null> => {
+  const getSigner = useCallback(async (): Promise<ethers.Signer | null> => {
     if (typeof window !== 'undefined' && (window as any).ethereum) {
       try {
-        if (!browserProviderRef.current) {
-          browserProviderRef.current = new ethers.BrowserProvider((window as any).ethereum);
-        }
-        return await browserProviderRef.current.getSigner();
+        const bp = new ethers.BrowserProvider((window as any).ethereum);
+        return await bp.getSigner();
       } catch (err) {
         console.warn('Failed to get signer:', err);
       }
     }
     return null;
-  };
+  }, []);
 
   const address = walletIsConnected ? walletAddress || '' : '';
   const isConnected = Boolean(walletIsConnected);
@@ -262,6 +382,13 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     isArbitrator,
     isTreasuryAdmin,
     reputationCount,
+    balanceNative,
+    balanceUsdc,
+    refreshBalances,
+    isWrongNetwork,
+    targetChainId: CHAIN_ID,
+    targetChainName: NETWORK_CONFIG.chainName,
+    switchToTargetNetwork,
     loading,
     error,
     currentRole,
@@ -277,6 +404,11 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     isArbitrator,
     isTreasuryAdmin,
     reputationCount,
+    balanceNative,
+    balanceUsdc,
+    refreshBalances,
+    isWrongNetwork,
+    switchToTargetNetwork,
     loading,
     error,
     currentRole,
@@ -285,6 +417,7 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     disconnectWallet,
     refreshOnChainState,
     getSigner,
+    getActiveProvider,
   ]);
 
   return (
@@ -300,6 +433,13 @@ const SAFE_FALLBACK_WEB3_CONTEXT: Web3ContextType = {
   isArbitrator: false,
   isTreasuryAdmin: false,
   reputationCount: 0,
+  balanceNative: '0.00',
+  balanceUsdc: '0.00',
+  refreshBalances: async () => {},
+  isWrongNetwork: false,
+  targetChainId: CHAIN_ID,
+  targetChainName: NETWORK_CONFIG.chainName,
+  switchToTargetNetwork: async () => {},
   loading: false,
   error: null,
   currentRole: 'visitor',

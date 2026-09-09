@@ -16,7 +16,7 @@ contract JudgeDAO is
     GovernorVotesQuorumFraction,
     GovernorTimelockControl
 {
-    constructor(IVotes _reputationSBT, TimelockController _timelock)
+    constructor(IVotes _reputationSBT, TimelockController timelockController_)
         Governor("PolyLance Judge DAO")
         GovernorSettings(
             1 days, // votingDelay (1 day = 86400 blocks)
@@ -25,7 +25,7 @@ contract JudgeDAO is
         )
         GovernorVotes(_reputationSBT)
         GovernorVotesQuorumFraction(20) // 20% of total ReputationSBT supply at snapshot
-        GovernorTimelockControl(_timelock)
+        GovernorTimelockControl(timelockController_)
     {}
 
     // ── Required Overrides ──

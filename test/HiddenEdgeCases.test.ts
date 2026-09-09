@@ -81,14 +81,14 @@ describe("HiddenEdgeCases & Security Bounds", function () {
   describe("JobFactory Security & Treasury", function () {
     it("should reject direct fee collection from non-job contracts", async function () {
       await expect(
-        factory.connect(attacker).collectFee(ethers.ZeroAddress, 0, { value: ethers.parseEther("0.1") })
-      ).to.be.revertedWith("Caller is not a registered job contract");
+        factory.connect(attacker).collectFee({ value: ethers.parseEther("0.1") })
+      ).to.be.revertedWith("Only registered job contracts");
     });
 
     it("should reject direct mintReputationSBT calls from non-job contracts", async function () {
       await expect(
         factory.connect(attacker).mintReputationSBT(attacker.address, ethers.ZeroAddress)
-      ).to.be.revertedWith("Caller is not a registered job contract");
+      ).to.be.revertedWith("Only registered job contracts");
     });
 
     it("should enforce TREASURY_ADMIN_ROLE for treasury withdrawals", async function () {
@@ -156,7 +156,7 @@ describe("HiddenEdgeCases & Security Bounds", function () {
 
     it("should prevent re-initialization of escrow contract", async function () {
       await expect(
-        job.initialize(attacker.address, "QmHack", 3600, ethers.ZeroAddress)
+        job.initialize(attacker.address, "QmHack", 3600)
       ).to.be.revertedWithCustomError(job, "InvalidInitialization");
     });
 

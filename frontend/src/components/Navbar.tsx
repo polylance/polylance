@@ -5,6 +5,7 @@ import { useWeb3 } from '../context/Web3Context';
 import { usePolyLanceData } from '../context/PolyLanceDataContext';
 import { PolyLanceLogo } from './PolyLanceLogo';
 import { LoginModal } from './LoginModal';
+import { WalletBalanceModal } from './WalletBalanceModal';
 import {
   Briefcase,
   PlusCircle,
@@ -24,10 +25,13 @@ import {
   Trophy,
   Settings,
   Grid,
-  Power
+  Power,
+  Wallet,
+  AlertTriangle
 } from 'lucide-react';
-import { truncateAddress } from '../utils/formatters';
+import { truncateAddress, formatPolBalance } from '../utils/formatters';
 import { dropdownVariants, transition } from '../lib/motion';
+
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Relatable Section Color Accent Palette
@@ -199,13 +203,26 @@ const DropdownLink: React.FC<DropdownLinkProps> = ({ to, icon, label, onClick, a
 // Main Navbar
 // ──────────────────────────────────────────────────────────────────────────────
 export const Navbar: React.FC = () => {
-  const { isConnected, address, currentRole, disconnectWallet } = useWeb3();
+  const { 
+    isConnected, 
+    address, 
+    currentRole, 
+    disconnectWallet, 
+    balanceNative, 
+    balanceUsdc,
+    isWrongNetwork,
+    targetChainName,
+    targetChainId,
+    switchToTargetNetwork
+  } = useWeb3();
   const { jobs } = usePolyLanceData();
   const location = useLocation();
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isBalanceModalOpen, setIsBalanceModalOpen] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+
 
   const moreRef = useRef<HTMLDivElement>(null);
 
@@ -276,11 +293,34 @@ export const Navbar: React.FC = () => {
 
   return (
     <>
+      {/* ── Wrong Network Alert Banner (MetaMask Network Guard) ────────────────────── */}
+      {isWrongNetwork && (
+        <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white text-xs font-medium px-4 py-2 flex items-center justify-between shadow-sm no-print relative z-50">
+          <div className="flex items-center gap-2 max-w-5xl">
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-white" />
+            </span>
+            <span>
+              <strong>Wrong Network Detected:</strong> Your wallet is connected to an unsupported chain. Please switch to <strong>{targetChainName}</strong> (Chain ID: {targetChainId}) to interact with PolyLance smart contracts and real payments.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={switchToTargetNetwork}
+            className="px-3.5 py-1 bg-white text-orange-800 hover:bg-orange-50 font-bold rounded-lg text-xs shadow-xs transition-all cursor-pointer shrink-0 ml-3 flex items-center gap-1.5"
+          >
+            <AlertTriangle size={13} className="text-orange-600" />
+            <span>Switch to {targetChainName}</span>
+          </button>
+        </div>
+      )}
+
       {/* ── Scroll-aware Liquid Glass Header with Full Backdrop Blur (iOS 26 Frosted Glass) ───────── */}
       <header
-        className="sticky top-0 z-50 w-full py-2 border-b border-slate-200/40 transition-all duration-300 no-print"
+        className="sticky top-0 z-50 w-full py-2 border-b border-slate-200/50 transition-all duration-300 no-print"
         style={{
-          background: scrolled ? 'rgba(246, 249, 252, 0.76)' : 'rgba(246, 249, 252, 0.88)',
+          background: scrolled ? 'rgba(246, 249, 252, 0.85)' : 'rgba(246, 249, 252, 0.94)',
           backdropFilter: 'blur(32px) saturate(190%)',
           WebkitBackdropFilter: 'blur(32px) saturate(190%)',
           boxShadow: scrolled ? '0 4px 20px rgba(15, 23, 42, 0.04)' : 'none',
@@ -288,21 +328,21 @@ export const Navbar: React.FC = () => {
       >
         <motion.nav
           animate={{
-            scale: scrolled ? 0.99 : 1,
+            scale: scrolled ? 0.995 : 1,
             boxShadow: scrolled
-              ? '0 12px 36px rgba(124,58,237,0.12), 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 1px rgba(255,255,255,1), inset 0 -1px 2px rgba(124,58,237,0.04)'
+              ? '0 12px 36px rgba(124,58,237,0.10), 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 1px rgba(255,255,255,1), inset 0 -1px 2px rgba(124,58,237,0.04)'
               : '0 4px 20px rgba(15,23,42,0.04), inset 0 1px 1px rgba(255,255,255,1), inset 0 -1px 2px rgba(0,0,0,0.02)',
           }}
           transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-          className="w-[calc(100%-1.5rem)] sm:w-[calc(100%-2.5rem)] max-w-[1480px] mx-auto
+          className="w-full max-w-[1800px] mx-auto
             flex items-center justify-between
-            px-6 sm:px-8 py-2 rounded-[24px] bg-white/80 border border-white/80 shadow-sm"
+            px-4 sm:px-6 lg:px-8 py-2 rounded-[24px] bg-white/80 border border-white/80 shadow-sm"
           style={{
             backdropFilter: 'blur(36px) saturate(200%)',
             WebkitBackdropFilter: 'blur(36px) saturate(200%)',
           }}
         >
-        {/* ── LEFT: Brand ─────────────────────────────────────────────── */}
+        {/* ── LEFT: Brand (Positioned at Left Side Corner) ─────────────────────────────── */}
         <div className="flex items-center shrink-0">
           <Link to="/" className="flex items-center gap-2 group shrink-0">
             <div className="relative">
@@ -443,30 +483,36 @@ export const Navbar: React.FC = () => {
                     </motion.span>
                   </button>
 
-                  {/* Apple-glass dropdown */}
+                  {/* Solid Opaque High-Z Dropdown */}
                   <AnimatePresence>
                     {isMoreOpen && (
                       <motion.div
                         variants={dropdownVariants}
-                        initial="initial"
-                        animate="animate"
+                        initial="hidden"
+                        animate="visible"
                         exit="exit"
-                        transition={transition.fast}
-                        className="absolute right-0 mt-2 w-48 rounded-2xl p-1 z-50"
+                        className="absolute top-full right-0 mt-2.5 w-52 rounded-2xl p-1.5 space-y-0.5 z-[100] bg-white border border-slate-200 shadow-2xl overflow-hidden"
                         style={{
-                          background: 'rgba(255,255,255,0.95)',
-                          backdropFilter: 'blur(24px) saturate(180%)',
-                          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-                          border: '1px solid rgba(255,255,255,0.8)',
-                          boxShadow: '0 16px 48px rgba(0,0,0,0.10), 0 4px 12px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.9)',
+                          boxShadow: '0 20px 40px -12px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(0, 0, 0, 0.06)',
                         }}
                       >
-                        {/* Admin / Judge specific options in More dropdown */}
-                        {(currentRole === 'admin' || currentRole === 'judge') && (
+                        {/* Admin shortcuts in dropdown */}
+                        {currentRole === 'admin' && (
                           <>
-                            <DropdownLink to="/jobs/post" icon={<PlusCircle size={13.5} />} label="Post Job" onClick={() => setIsMoreOpen(false)} accent="cyan" />
                             <DropdownLink to="/reputation" icon={<Trophy size={13.5} />} label="SBT Leaderboard" onClick={() => setIsMoreOpen(false)} accent="amber" />
-                            {currentRole === 'admin' && (
+                            <DropdownLink to="/judge" icon={<Scale size={13.5} />} label="Judge Panel" onClick={() => setIsMoreOpen(false)} accent="orange" />
+                            <div className="border-t border-slate-100 my-0.5" />
+                          </>
+                        )}
+                        {currentRole === 'judge' && (
+                          <>
+                            <DropdownLink to="/reputation" icon={<Trophy size={13.5} />} label="SBT Leaderboard" onClick={() => setIsMoreOpen(false)} accent="amber" />
+                            <div className="border-t border-slate-100 my-0.5" />
+                          </>
+                        )}
+                        {currentRole !== 'admin' && currentRole !== 'judge' && (
+                          <>
+                            {(currentRole === 'client' || currentRole === 'freelancer') && (
                               <DropdownLink to="/judge" icon={<Scale size={13.5} />} label="Judge Panel" onClick={() => setIsMoreOpen(false)} accent="orange" />
                             )}
                             <div className="border-t border-slate-100 my-0.5" />
@@ -485,47 +531,77 @@ export const Navbar: React.FC = () => {
         </div>
 
         {/* ── RIGHT: Wallet + Mobile Toggle ──────────────────────────── */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {isConnected && address ? (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
+              {/* Network Warning Pill if wrong network */}
+              {isWrongNetwork ? (
+                <button
+                  type="button"
+                  onClick={switchToTargetNetwork}
+                  title={`Click to switch wallet network to ${targetChainName}`}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 shadow-2xs transition-all cursor-pointer animate-pulse"
+                >
+                  <AlertTriangle size={13} className="text-amber-600 shrink-0" />
+                  <span>Switch to {targetChainName}</span>
+                </button>
+              ) : (
+                /* Real-Time Live Wallet Money Pill (Clickable -> Full Balance Breakdown Modal) */
+                <button
+                  type="button"
+                  onClick={() => setIsBalanceModalOpen(true)}
+                  title="Click to view full wallet & balance details"
+                  className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono font-bold bg-white/85 hover:bg-purple-50/80 border border-purple-200/80 hover:border-purple-300 text-slate-800 shadow-2xs transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center gap-1.5 text-purple-700 group-hover:text-purple-900">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                    <span>{formatPolBalance(balanceNative)} POL</span>
+                  </div>
+                  <span className="text-slate-300">|</span>
+                  <div className="text-emerald-700 group-hover:text-emerald-900">
+                    <span>${balanceUsdc} USDC</span>
+                  </div>
+                </button>
+              )}
+
+              {/* User Account Profile Pill */}
               <Link
                 to={`/profile/${address}`}
+                title="View User Profile"
                 className="
                   flex items-center gap-1.5 px-3 py-1.5 rounded-full
                   text-[12.5px] font-semibold font-mono text-purple-700
-                  hover:bg-purple-100/80 transition-all duration-200
+                  hover:bg-purple-100/90 transition-all duration-200
                   apple-button
                 "
                 style={{
                   background: 'rgba(246,240,255,0.85)',
-                  border: '1px solid rgba(167,139,250,0.30)',
+                  border: '1px solid rgba(167,139,250,0.35)',
                   boxShadow: '0 1px 3px rgba(124,58,237,0.08), inset 0 1px 0 rgba(255,255,255,0.8)',
                 }}
               >
-                <div className="w-3.5 h-3.5 rounded-full bg-purple-500 flex items-center justify-center shrink-0">
-                  <User size={9} className="text-white" />
+                <div className="w-4 h-4 rounded-full bg-purple-500 flex items-center justify-center shrink-0 shadow-xs">
+                  <User size={9.5} className="text-white" />
                 </div>
                 <span>{truncateAddress(address)}</span>
                 <ChevronDown size={10} className="text-purple-400" />
               </Link>
 
+              {/* Redesigned Clean Disconnect Button */}
               <motion.button
+                type="button"
                 onClick={disconnectWallet}
                 title="Disconnect Wallet"
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
+                whileHover={{ scale: 1.06 }}
+                whileTap={{ scale: 0.94 }}
                 className="
-                  w-7 h-7 rounded-full flex items-center justify-center
-                  text-slate-400 hover:text-rose-500
-                  cursor-pointer transition-colors duration-200
+                  w-8 h-8 rounded-full flex items-center justify-center
+                  bg-white/85 hover:bg-rose-50 text-slate-400 hover:text-rose-600
+                  border border-slate-200/80 hover:border-rose-300
+                  shadow-xs transition-all duration-200 cursor-pointer shrink-0
                 "
-                style={{
-                  background: 'rgba(255,255,255,0.75)',
-                  border: '1px solid rgba(255,255,255,0.65)',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.9)',
-                }}
               >
-                <Power size={12} className="stroke-[2]" />
+                <Power size={13} className="stroke-[2.2]" />
               </motion.button>
             </div>
           ) : (
@@ -612,6 +688,24 @@ export const Navbar: React.FC = () => {
                 </>
               ) : (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobileOpen(false);
+                      setIsBalanceModalOpen(true);
+                    }}
+                    className="w-full p-2.5 mb-2 rounded-2xl bg-purple-50/80 hover:bg-purple-100/80 border border-purple-200/60 flex items-center justify-between text-xs font-mono transition-colors cursor-pointer"
+                  >
+                    <span className="text-slate-600 font-sans font-semibold flex items-center gap-1.5">
+                      <Wallet size={13} className="text-purple-600" />
+                      Live Wallet:
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-purple-700 font-bold">{formatPolBalance(balanceNative)} POL</span>
+                      <span className="text-slate-300">|</span>
+                      <span className="text-emerald-700 font-bold">${balanceUsdc} USDC</span>
+                    </div>
+                  </button>
                   <MobileLink to="/dashboard" icon={<LayoutDashboard size={14} className="text-blue-500" />} label="Dashboard" onClick={() => setIsMobileOpen(false)} accent="blue" />
                   <MobileLink to="/workspace" icon={<Briefcase size={14} className="text-emerald-500" />} label="Job Workspace" onClick={() => setIsMobileOpen(false)} accent="emerald" />
                   {(currentRole === 'client' || currentRole === 'judge' || currentRole === 'admin') && (
@@ -634,9 +728,9 @@ export const Navbar: React.FC = () => {
                     <MobileLink to="/settings" icon={<Settings size={14} className="text-slate-400" />} label="Settings" onClick={() => setIsMobileOpen(false)} accent="slate" />
                     <button
                       onClick={() => { disconnectWallet(); setIsMobileOpen(false); }}
-                      className="w-full flex items-center gap-2.5 p-2 rounded-xl text-[13px] font-semibold text-rose-600 hover:bg-rose-50 transition-all text-left"
+                      className="w-full flex items-center gap-2.5 p-2 rounded-xl text-[13px] font-semibold text-rose-600 hover:bg-rose-50 transition-all text-left cursor-pointer"
                     >
-                      <Power size={14} /> Disconnect
+                      <Power size={14} /> Disconnect Wallet
                     </button>
                   </div>
                 </>
@@ -648,9 +742,11 @@ export const Navbar: React.FC = () => {
       </header>
 
       <LoginModal isOpen={isLoginModalOpen} onClose={() => setIsLoginModalOpen(false)} />
+      <WalletBalanceModal isOpen={isBalanceModalOpen} onClose={() => setIsBalanceModalOpen(false)} />
     </>
   );
 };
+
 
 // Helper for mobile nav items
 interface MobileLinkProps {

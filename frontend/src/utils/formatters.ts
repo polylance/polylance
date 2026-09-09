@@ -7,6 +7,16 @@ export function truncateAddress(addr: string | undefined): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
+/**
+ * Formats POL amount to 3 decimal digits (.000)
+ */
+export function formatPolBalance(val: string | number | undefined): string {
+  if (val === undefined || val === null || val === '') return '0.000';
+  const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/[^0-9.-]/g, '')) || 0;
+  return num.toFixed(3);
+}
+
+
 export function formatTimeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
   if (seconds < 60) return `${seconds}s ago`;
@@ -41,6 +51,37 @@ export function generateMockTxHash(): string {
 
 export function generateDeterministicHash(seed: string = Date.now().toString()): string {
   return ethers.keccak256(ethers.toUtf8Bytes(seed));
+}
+
+export function formatWeb3ErrorMessage(err: any): string {
+  if (!err) return 'Transaction failed. Please try again.';
+  const rawMsg = String(err?.message || err?.shortMessage || err?.data?.message || err || '');
+  const code = err?.code ?? err?.error?.code ?? err?.info?.error?.code;
+
+  if (
+    code === 'ACTION_REJECTED' ||
+    code === 4001 ||
+    rawMsg.includes('ACTION_REJECTED') ||
+    rawMsg.includes('user rejected') ||
+    rawMsg.includes('User denied') ||
+    rawMsg.includes('User rejected the request')
+  ) {
+    return 'Transaction signature rejected in wallet.';
+  }
+
+  if (rawMsg.includes('insufficient funds') || rawMsg.includes('exceeds balance')) {
+    return 'Insufficient funds in wallet for gas and amount.';
+  }
+
+  if (rawMsg.includes('CALL_EXCEPTION') || rawMsg.includes('execution reverted')) {
+    return 'Contract transaction execution reverted on-chain.';
+  }
+
+  if (rawMsg.includes('network') || rawMsg.includes('Wrong network')) {
+    return 'Network mismatch. Please verify wallet is connected to the right Polygon chain.';
+  }
+
+  return rawMsg.length > 120 ? `${rawMsg.slice(0, 117)}...` : rawMsg;
 }
 
 export function getPolygonScanUrl(txHash: string): string {
