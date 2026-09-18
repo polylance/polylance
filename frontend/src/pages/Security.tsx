@@ -109,11 +109,11 @@ export const Security: React.FC = () => {
           <div className="flex items-center gap-2.5">
             <Terminal size={22} className="text-emerald-600" />
             <h3 className="font-headline font-bold text-xl text-slate-900">
-              Verified Polygon Amoy Smart Contracts
+              Verified Polygon Mainnet Smart Contracts
             </h3>
           </div>
           <span className="font-mono text-xs text-slate-500 font-bold">
-            Chain ID: 80002
+            Chain ID: 137
           </span>
         </div>
 

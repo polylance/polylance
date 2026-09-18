@@ -36,7 +36,7 @@ export const Footer: React.FC = () => {
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-slate-50 border border-slate-200/80 rounded-full text-[11px] font-mono text-slate-600 shadow-4xs">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
               <span className="w-2 h-2 rounded-full bg-emerald-500 -ml-4" />
-              <span className="font-bold">Polygon Amoy Testnet (80002)</span>
+              <span className="font-bold">Polygon Mainnet (137)</span>
             </div>
           </div>
 
