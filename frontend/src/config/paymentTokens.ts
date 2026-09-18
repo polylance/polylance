@@ -14,6 +14,11 @@ export const PAYMENT_TOKENS = {
     symbol: "USDC",
     decimals: 6,
   },
+  USDT: {
+    address: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // real Polygon mainnet USDT (PoS bridged)
+    symbol: "USDT",
+    decimals: 6,
+  },
 } as const;
 
 export type PaymentTokenSymbol = keyof typeof PAYMENT_TOKENS;

@@ -135,7 +135,7 @@ export const Security: React.FC = () => {
                   <td className="p-3.5 text-slate-600 font-mono text-[11px]">{c.address}</td>
                   <td className="p-3.5">
                     <a
-                      href={`https://amoy.polygonscan.com/address/${c.address}`}
+                      href={`https://polygonscan.com/address/${c.address}`}
                       target="_blank"
                       rel="noreferrer"
                       className="text-emerald-700 font-bold hover:underline inline-flex items-center gap-1"

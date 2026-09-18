@@ -112,7 +112,7 @@ const connectors = connectorsForWallets(
 
 const config = createConfig({
   connectors,
-  chains: [polygonAmoy, polygon, mainnet],
+  chains: [polygon, polygonAmoy, mainnet],
   transports: {
     [polygonAmoy.id]: fallback([
       http('https://polygon-amoy-bor-rpc.publicnode.com'),

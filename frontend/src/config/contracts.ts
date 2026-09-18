@@ -2,13 +2,13 @@ import localAddresses from "./localhost_addresses.json";
 import amoyAddresses from "./amoy_addresses.json";
 import polygonAddresses from "./polygon_addresses.json";
 
-const network = import.meta.env.VITE_NETWORK ?? "amoy";
+const network = import.meta.env.VITE_NETWORK ?? "polygon";
 const manifest = 
-  network === "polygon" 
-    ? polygonAddresses 
+  network === "amoy" 
+    ? amoyAddresses 
     : network === "localhost" 
       ? localAddresses 
-      : amoyAddresses;
+      : polygonAddresses;
 
 export const CONTRACTS = {
   JobFactory: manifest.JobFactory,
@@ -22,19 +22,19 @@ export const CONTRACTS = {
 export const CONTRACT_ADDRESSES = CONTRACTS;
 
 export const CHAIN_ID = 
-  network === "polygon" 
-    ? 137 
-    : network === "amoy" 
-      ? 80002 
-      : 31337;
+  network === "amoy" 
+    ? 80002 
+    : network === "localhost" 
+      ? 31337 
+      : 137;
 
 export const RPC_URL =
   import.meta.env.VITE_RPC_URL ||
-  (network === "polygon"
-    ? "https://polygon-bor-rpc.publicnode.com"
-    : network === "amoy"
-      ? "https://polygon-amoy-bor-rpc.publicnode.com"
-      : "http://127.0.0.1:8545");
+  (network === "amoy"
+    ? "https://polygon-amoy-bor-rpc.publicnode.com"
+    : network === "localhost"
+      ? "http://127.0.0.1:8545"
+      : "https://polygon-bor-rpc.publicnode.com");
 
 export const NETWORK_CONFIG = {
   chainId: CHAIN_ID,

@@ -120,7 +120,7 @@ export const Footer: React.FC = () => {
           <div className="flex items-center gap-4 text-[11px]">
             <span className="text-slate-400">Non-Custodial • Immutable • ERC-5192 SBT</span>
             <a
-              href="https://amoy.polygonscan.com"
+              href="https://polygonscan.com"
               target="_blank"
               rel="noreferrer"
               className="hover:text-purple-600 inline-flex items-center gap-1 font-bold text-purple-700"

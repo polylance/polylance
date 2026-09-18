@@ -20,7 +20,7 @@ export const Terms: React.FC = () => {
       details: [
         'No centralized entity, exchange, or team member holds custody of user funds at any point.',
         'Funds can only be disbursed via cryptographic signatures from the Client (milestone approval), mutual cancellation agreement, or automated dispute resolution by an appointed Arbitrator.',
-        'Smart contracts operate autonomously according to open-source bytecode deployed on Polygon Amoy testnet (and mainnet).'
+        'Smart contracts operate autonomously according to open-source bytecode deployed on Polygon Mainnet.'
       ]
     },
     {
@@ -108,7 +108,7 @@ export const Terms: React.FC = () => {
               Last Updated: August 2026
             </span>
             <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-lg border border-purple-100 font-bold">
-              Protocol Version: V1.0-Amoy
+              Protocol Version: V1.0-PolygonMainnet
             </span>
           </div>
         </div>
