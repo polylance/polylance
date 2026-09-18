@@ -51,7 +51,7 @@ export const WalletBalanceModal: React.FC<WalletBalanceModalProps> = ({ isOpen, 
     }
   };
 
-  const explorerUrl = `${NETWORK_CONFIG.blockExplorerUrl || 'https://amoy.polygonscan.com'}/address/${address}`;
+  const explorerUrl = `${NETWORK_CONFIG.blockExplorerUrl || 'https://polygonscan.com'}/address/${address}`;
 
   // Safe numeric parsing for display
   const polNum = parseFloat(balanceNative || '0');
@@ -229,7 +229,7 @@ export const WalletBalanceModal: React.FC<WalletBalanceModalProps> = ({ isOpen, 
                   Network
                 </span>
                 <span className="font-mono font-bold text-slate-800">
-                  {NETWORK_CONFIG.chainName || 'Polygon PoS / Amoy'} ({NETWORK_CONFIG.chainId})
+                  {NETWORK_CONFIG.chainName || 'Polygon Mainnet'} ({NETWORK_CONFIG.chainId})
                 </span>
 
               </div>

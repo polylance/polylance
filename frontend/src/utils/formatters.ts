@@ -85,7 +85,7 @@ export function formatWeb3ErrorMessage(err: any): string {
 }
 
 export function getPolygonScanUrl(txHash: string): string {
-  const baseUrl = NETWORK_CONFIG.blockExplorerUrl || 'https://amoy.polygonscan.com';
+  const baseUrl = NETWORK_CONFIG.blockExplorerUrl || 'https://polygonscan.com';
   return `${baseUrl}/tx/${txHash}`;
 }
 

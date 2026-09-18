@@ -11,28 +11,27 @@ This document is the single reference guide for setting up, configuring, compili
    - Copy `frontend/.env.example` → `frontend/.env.local` (or `.env.local` in root)
 
 2. **RPC Setup**
-   - Fill in `RPC_URL` / `AMOY_RPC_URL` with a Polygon Amoy testnet RPC endpoint (from Alchemy or Infura).
+   - Fill in `POLYGON_MAINNET_RPC_URL` / `RPC_URL` with a Polygon Mainnet RPC endpoint (e.g. Alchemy, Infura, or public Bor RPC).
 
 3. **Deployer Wallet**
-   - Generate a fresh deployer wallet private key for testnet.
-   - ⚠️ **NEVER** reuse a mainnet real-funds wallet key for testnet deployment.
+   - Generate a fresh deployer wallet private key funded with POL for deployment gas.
 
 4. **Deploy Smart Contracts**
    ```bash
-   npx hardhat run scripts/deploy.ts --network amoy
+   npx hardhat run scripts/deploy.ts --network polygon
    ```
    - This deploys all 7 core contracts: `JobEscrowImplementation`, `ReputationSBT`, `JobFactory`, `ProfileRegistry`, `GithubReputationRegistry`, `TimelockController`, and `JudgeDAO`.
-   - Addresses are automatically saved to `./deployments/amoy_addresses.json`.
+   - Addresses are automatically saved to `./deployments/polygon_addresses.json`.
 
 5. **Update App Configuration**
-   - Copy deployed addresses from `./deployments/amoy_addresses.json` into `.env.local`.
+   - Addresses are automatically synced to `frontend/src/config/polygon_addresses.json`.
 
 6. **Configure Bootstrap Roles & Multi-Sig Safe**
-   - Create a 2-of-2 Gnosis Safe on Polygon Amoy at [safe.global](https://safe.global).
+   - Create a Gnosis Safe on Polygon Mainnet at [safe.global](https://safe.global).
    - Update `JUDGE_1_ADDRESS`, `JUDGE_2_ADDRESS`, and `TREASURY_SAFE_ADDRESS` in `.env`.
    - Run the bootstrap setup:
      ```bash
-     npx hardhat run scripts/bootstrap.ts --network amoy
+     npx hardhat run scripts/bootstrap.ts --network polygon
      ```
 
 7. **Verify Roles**

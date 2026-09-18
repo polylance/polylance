@@ -25,7 +25,7 @@ export async function encodeWithdrawTreasuryData(
 
 /**
  * Gnosis Safe Transaction Service Integration Helper
- * Interfaces with Safe Transaction API Endpoint for Polygon Amoy (ChainId 80002)
+ * Interfaces with Safe Transaction API Endpoint for Polygon Mainnet (ChainId 137)
  */
 export async function getPendingTreasuryTransactions(
   safeAddress: string,
