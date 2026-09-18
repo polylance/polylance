@@ -284,9 +284,67 @@ const broadcastSync = (data: {
       method: 'POST',
       headers,
       body: JSON.stringify(data),
-    }).catch(() => {});
+    }).catch(() => {
+      // Server is cold-starting (Render free tier) — queue for retry after next successful poll
+      enqueueOutbox(ep, activeAddr, JSON.stringify(data));
+    });
   });
 };
+
+// ── Outbox: queues failed sync POSTs and retries them after the server wakes ──
+const OUTBOX_KEY = 'polylance_sync_outbox';
+
+interface OutboxEntry {
+  endpoint: string;
+  address: string;
+  body: string;
+  queuedAt: number;
+}
+
+function loadOutbox(): OutboxEntry[] {
+  try {
+    const raw = sessionStorage.getItem(OUTBOX_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveOutbox(entries: OutboxEntry[]) {
+  try {
+    // Evict entries older than 5 minutes to prevent indefinite growth
+    const fresh = entries.filter(e => Date.now() - e.queuedAt < 5 * 60 * 1000);
+    sessionStorage.setItem(OUTBOX_KEY, JSON.stringify(fresh));
+  } catch {}
+}
+
+function enqueueOutbox(endpoint: string, address: string, body: string) {
+  const outbox = loadOutbox();
+  // Deduplicate by endpoint+address: replace existing entry rather than pile up
+  const idx = outbox.findIndex(e => e.endpoint === endpoint && e.address === address);
+  const entry: OutboxEntry = { endpoint, address, body, queuedAt: Date.now() };
+  if (idx >= 0) outbox[idx] = entry; else outbox.push(entry);
+  saveOutbox(outbox);
+}
+
+/** Drain queued failed POSTs after any successful GET /api/sync confirms the server is alive */
+export async function drainSyncOutbox() {
+  const outbox = loadOutbox();
+  if (outbox.length === 0) return;
+  const remaining: OutboxEntry[] = [];
+  for (const entry of outbox) {
+    try {
+      const r = await fetch(`${entry.endpoint}/api/sync?address=${encodeURIComponent(entry.address)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-wallet-address': entry.address },
+        body: entry.body,
+      });
+      if (!r.ok) remaining.push(entry);
+    } catch {
+      remaining.push(entry);
+    }
+  }
+  saveOutbox(remaining);
+}
+
 
 
 
@@ -862,6 +920,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
         })
         .then((payload) => {
           backendSyncOfflineUntil = 0;
+          drainSyncOutbox(); // server is alive — replay any queued POSTs from cold-start downtime
           let currentLocalJobs: Job[] = [];
           try {
             const saved = localStorage.getItem('polylance_jobs');
@@ -1038,6 +1097,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
             if (Array.isArray(payload.judges)) setJudgesRaw([...payload.judges]);
             if (Array.isArray(payload.treasuryProposals)) setTreasuryProposalsRaw([...payload.treasuryProposals]);
             if (Array.isArray(payload.treasuryHistory)) setTreasuryHistoryRaw([...payload.treasuryHistory]);
+            drainSyncOutbox(); // server confirmed alive — replay any writes that failed during cold-start
             return; // Successfully updated from live cloud database
           }
         } catch (err) {
@@ -1098,6 +1158,7 @@ export const PolyLanceDataProvider: React.FC<{ children: React.ReactNode }> = ({
       .then((payload) => {
         if (!payload) return;
         backendSyncOfflineUntil = 0;
+        drainSyncOutbox(); // server is alive — replay queued writes
         if (Array.isArray(payload.jobs) && payload.jobs.length > 0) {
           setJobsRaw((curr) => {
             const merged = mergeJobsList(curr, payload.jobs);
