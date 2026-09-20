@@ -54,3 +54,32 @@ model ProfileRecord {
   updatedAt DateTime @updatedAt
 }
 
+model AuditAlert {
+  id               String   @id @default(uuid())
+  alert_id         String   @unique
+  contract_address String
+  chain            String
+  severity         String
+  category         String
+  title            String
+  description      String
+  detected_at      DateTime
+  tx_hash          String?
+  event_type       String?
+  schema_version   String   @default("1.0.0")
+  received_at      DateTime @default(now())
+  status           String   @default("RECEIVED")
+
+  @@index([contract_address])
+  @@index([severity])
+  @@index([detected_at])
+}
+
+model WebhookNonce {
+  nonce     String   @id
+  usedAt    DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
