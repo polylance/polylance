@@ -1,0 +1,79 @@
+{
+  "rpc": {
+    "http": "https://polygon-bor-rpc.publicnode.com",
+    "wss": "wss://polygon-bor-rpc.publicnode.com",
+    "chainId": 137,
+    "network": "Polygon Mainnet"
+  },
+  "contracts": {
+    "JobEscrowImplementation": {
+      "address": "0x88dd19df1b6dBA8D2c53b3976f4ec39B75f17FbB",
+      "sourcePath": "contracts/JobEscrow.sol",
+      "deploymentBlock": null,
+      "deploymentTxHash": null,
+      "deploymentBlock_notFound": true,
+      "deploymentTxHash_notFound": true,
+      "note": "EIP-1167 implementation — each job deploys a minimal proxy clone of this"
+    },
+    "JobFactory": {
+      "address": "0xbE74923BBfd72d400a681915dBcf6e6Adc72C317",
+      "sourcePath": "contracts/JobFactory.sol",
+      "deploymentBlock": null,
+      "deploymentTxHash": null,
+      "deploymentBlock_notFound": true,
+      "deploymentTxHash_notFound": true,
+      "eventSignature": "event JobDeployed(address indexed jobContract, address indexed client, address paymentToken)",
+      "note": "Emits JobDeployed(address indexed jobContract, address indexed client, address paymentToken) on clone creation"
+    },
+    "ReputationSBT": {
+      "address": "0x22A61f83cEB94233d30a20EEacBdEB9BCC1C2879",
+      "sourcePath": "contracts/ReputationSBT.sol"
+    },
+    "ProfileRegistry": {
+      "address": "0xA408070979043215C8C91d245973886eA7c09f42",
+      "sourcePath": "contracts/ProfileRegistry.sol"
+    },
+    "GithubReputationRegistry": {
+      "address": "0x91e103Fd78ccC3233d08f4830587763F72b9D5aB",
+      "sourcePath": "contracts/GithubReputationRegistry.sol"
+    },
+    "TimelockController": {
+      "address": "0x45602bE11306651C7FA5c96Bc7fa5051BA4a856f",
+      "sourcePath": "contracts/governance/TimelockController.sol"
+    },
+    "JudgeDAO": {
+      "address": "0xe991e45907Bd341a036CF4A6a95768af198d4b86",
+      "sourcePath": "contracts/JudgeDAO.sol"
+    }
+  },
+  "roles": {
+    "DEFAULT_ADMIN_ROLE": "0xc0Af73834fc45E88664e94D98B77cde62Fc1139E",
+    "TREASURY_ADMIN_ROLE": "0x2BfAAE968b81C1817647498660088F74e1B4cAE3",
+    "ARBITRATOR_ROLE": [
+      "0x25F6C8ed995C811E6c0ADb1D66A60830E8115e9A",
+      "0x62cDfc0692cC675c95304BaCE2C834D8F901dCba",
+      "0xB8aa0398B91A150B041DA819bc954Bb356e009Dd"
+    ]
+  },
+  "webhook": {
+    "routePath": "/api/webhooks/auditx-alert",
+    "handlerSourcePath": "app/api/webhooks/auditx-alert/route.ts",
+    "signatureHeader": "x-auditx-signature",
+    "signatureAlgorithm": "HMAC-SHA256 (timingSafeEqual)",
+    "secretEnvVarName": "AUDITX_WEBHOOK_SECRET",
+    "productionUrl": null,
+    "productionUrl_notFound": true,
+    "candidates": [
+      "https://polylance.codes",
+      "https://polylance.github.io"
+    ]
+  },
+  "dataStore": {
+    "chatServiceDb": "PostgreSQL (Prisma)",
+    "chatServiceDbEnvVar": "DATABASE_URL",
+    "rateLimiter": "Upstash Redis / In-memory fallback",
+    "webhookAlertStore": "In-memory Map (lib/alerts/store.ts)",
+    "persistentAlertTable": null,
+    "persistentAlertTable_notFound": true
+  }
+}
