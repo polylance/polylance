@@ -22,6 +22,7 @@ import {
   formatCanonicalCertId,
   formatUsdcString
 } from "./certifiedPassSync.js";
+import { createAuditXWebhookHandler } from "./auditx/webhookHandler.js";
 
 dotenv.config();
 
@@ -401,7 +402,7 @@ function mergeJobsOnServer(existingJobs: any[], incomingJobs: any[]): any[] {
 // Background cron every 60 seconds to prune expired inactive jobs
 setInterval(pruneExpiredJobsOnServer, 60000);
 
-const app = express();
+export const app = express();
 const allowedOrigins: string[] = (process.env.ALLOWED_ORIGINS || [
   "http://localhost:5173",
   "https://polylance-fv-1.onrender.com",
@@ -424,7 +425,12 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({
+  limit: "2mb",
+  verify: (req: any, _res: any, buf: Buffer) => {
+    req.rawBody = buf.toString("utf8");
+  },
+}));
 
 // Security headers middleware
 app.use((req: Request, res: Response, next) => {
@@ -1857,6 +1863,23 @@ app.post("/api/certifiedpass/sync-sbt", async (req: Request, res: Response) => {
     res.json({ success: true, message: "SBT replicated to CertifiedPass DB (Amount Protected)" });
   } catch (err: any) {
     res.status(500).json({ error: "SBT sync failed", details: err?.message || err });
+  }
+});
+
+// AuditX Security Webhook Receiver
+app.post("/api/webhooks/auditx-alert", (req: Request, res: Response) => {
+  createAuditXWebhookHandler(prisma)(req, res);
+});
+
+app.get("/api/webhooks/auditx-alert", async (_req: Request, res: Response) => {
+  try {
+    const alerts = await prisma.auditAlert.findMany({
+      take: 50,
+      orderBy: { detected_at: "desc" },
+    });
+    res.json({ total: alerts.length, alerts });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to retrieve alerts", details: err?.message || err });
   }
 });
 

@@ -12,6 +12,7 @@ import { createConversationKey } from "./crypto/ecies.js";
 import { startPaymentListener } from "./paymentListener.js";
 import { authLimiter, messageLimiter, joinLimiter, deleteLimiter, httpLimiter } from "./ratelimit.js";
 import { initCertifiedPassDatabase, syncSBTToCertifiedPass, syncAllStateToCertifiedPass, getCertifiedCertificate, certifiedPassClient, formatCanonicalCertId } from "./certifiedPassSync.js";
+import { createAuditXWebhookHandler } from "./auditx/webhookHandler.js";
 dotenv.config();
 const STATE_FILE = path.resolve(process.cwd(), "polylance_shared_state.json");
 let sharedState = {
@@ -356,7 +357,7 @@ function mergeJobsOnServer(existingJobs, incomingJobs) {
 }
 // Background cron every 60 seconds to prune expired inactive jobs
 setInterval(pruneExpiredJobsOnServer, 60000);
-const app = express();
+export const app = express();
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || [
     "http://localhost:5173",
     "https://polylance-fv-1.onrender.com",
@@ -382,7 +383,12 @@ app.use(cors({
     },
     credentials: true,
 }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({
+    limit: "2mb",
+    verify: (req, _res, buf) => {
+        req.rawBody = buf.toString("utf8");
+    },
+}));
 // Security headers middleware
 app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -1657,6 +1663,22 @@ app.post("/api/certifiedpass/sync-sbt", async (req, res) => {
     }
     catch (err) {
         res.status(500).json({ error: "SBT sync failed", details: err?.message || err });
+    }
+});
+// AuditX Security Webhook Receiver
+app.post("/api/webhooks/auditx-alert", (req, res) => {
+    createAuditXWebhookHandler(prisma)(req, res);
+});
+app.get("/api/webhooks/auditx-alert", async (_req, res) => {
+    try {
+        const alerts = await prisma.auditAlert.findMany({
+            take: 50,
+            orderBy: { detected_at: "desc" },
+        });
+        res.json({ total: alerts.length, alerts });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to retrieve alerts", details: err?.message || err });
     }
 });
 app.get("/health", (req, res) => {

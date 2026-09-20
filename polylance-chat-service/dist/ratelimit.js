@@ -59,3 +59,7 @@ export const joinLimiter = createLimiter("join", 20, 60 * 1000, "1 m");
 export const deleteLimiter = createLimiter("delete", 5, 60 * 60 * 1000, "1 h");
 // 5. HTTP Limiter: 60 requests/min per IP
 export const httpLimiter = createLimiter("http", 60, 60 * 1000, "1 m");
+// 6. AuditX Webhook Ceiling: 100 requests/min per IP
+export const webhookLimiter = createLimiter("webhook", 100, 60 * 1000, "1 m");
+// 7. AuditX Failed Webhook Auth Limiter: 5 attempts/min per IP
+export const failedWebhookAuthLimiter = createLimiter("failed-webhook", 5, 60 * 1000, "1 m");
