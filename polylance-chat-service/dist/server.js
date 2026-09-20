@@ -355,8 +355,15 @@ function mergeJobsOnServer(existingJobs, incomingJobs) {
     });
     return Array.from(map.values()).filter((j) => !isJobExpiredOnServer(j));
 }
+import { purgeExpiredWebhookNonces } from "./auditx/verifyWebhook.js";
 // Background cron every 60 seconds to prune expired inactive jobs
 setInterval(pruneExpiredJobsOnServer, 60000);
+// Background cron every 10 minutes to purge expired AuditX webhook nonces
+setInterval(() => {
+    if (prisma) {
+        purgeExpiredWebhookNonces(prisma).catch(() => { });
+    }
+}, 10 * 60 * 1000);
 export const app = express();
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || [
     "http://localhost:5173",

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import crypto from "crypto";
 import { createAuditXWebhookHandler } from "../auditx/webhookHandler.js";
-import { clearNonceMemoryCache } from "../auditx/verifyWebhook.js";
+import { clearNonceMemoryCache, purgeExpiredWebhookNonces } from "../auditx/verifyWebhook.js";
 
 const TEST_SECRET = "sec_test_secret_0123456789abcdef0123456789abcdef";
 
@@ -242,6 +242,75 @@ describe("AuditX Webhook Receiver in polylance-chat-service", () => {
     expect(mockPrisma.auditAlert.create).not.toHaveBeenCalled();
   });
 
+  it("5a. Rejects short signature with HTTP 401 (not 500)", async () => {
+    const timestamp = Date.now().toString();
+    const nonce = `nonce_${crypto.randomBytes(8).toString("hex")}`;
+    const rawBody = JSON.stringify(samplePayload);
+    const shortSignature = "abcd1234ef56"; // Only 12 chars
+
+    const handler = createAuditXWebhookHandler(mockPrisma);
+    const { req, res } = createMockReqRes(
+      {
+        "x-auditx-signature": shortSignature,
+        "x-auditx-timestamp": timestamp,
+        "x-auditx-nonce": nonce,
+      },
+      samplePayload,
+      rawBody
+    );
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.jsonData.error).toContain("Invalid signature format");
+  });
+
+  it("5b. Rejects long signature with HTTP 401 (not 500)", async () => {
+    const timestamp = Date.now().toString();
+    const nonce = `nonce_${crypto.randomBytes(8).toString("hex")}`;
+    const rawBody = JSON.stringify(samplePayload);
+    const longSignature = "a".repeat(80); // 80 chars
+
+    const handler = createAuditXWebhookHandler(mockPrisma);
+    const { req, res } = createMockReqRes(
+      {
+        "x-auditx-signature": longSignature,
+        "x-auditx-timestamp": timestamp,
+        "x-auditx-nonce": nonce,
+      },
+      samplePayload,
+      rawBody
+    );
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.jsonData.error).toContain("Invalid signature format");
+  });
+
+  it("5c. Rejects non-hex signature with HTTP 401 (not 500)", async () => {
+    const timestamp = Date.now().toString();
+    const nonce = `nonce_${crypto.randomBytes(8).toString("hex")}`;
+    const rawBody = JSON.stringify(samplePayload);
+    const nonHexSignature = "z".repeat(64); // 64 chars, but 'z' is not hex
+
+    const handler = createAuditXWebhookHandler(mockPrisma);
+    const { req, res } = createMockReqRes(
+      {
+        "x-auditx-signature": nonHexSignature,
+        "x-auditx-timestamp": timestamp,
+        "x-auditx-nonce": nonce,
+      },
+      samplePayload,
+      rawBody
+    );
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.jsonData.error).toContain("Invalid signature format");
+  });
+
   it("6. Rejects missing required headers with 400/401", async () => {
     const handler = createAuditXWebhookHandler(mockPrisma);
 
@@ -349,5 +418,12 @@ describe("AuditX Webhook Receiver in polylance-chat-service", () => {
     expect(committed.schema_version).toBe("1.0.0");
     expect(committed.category).toBe("SCAM_FLAGGED_COUNTERPARTY");
     expect(committed.severity).toBe("HIGH");
+  });
+
+  it("9. Purges expired WebhookNonce rows correctly", async () => {
+    mockPrisma.webhookNonce.deleteMany = vi.fn(async () => ({ count: 5 }));
+    const count = await purgeExpiredWebhookNonces(mockPrisma);
+    expect(count).toBe(5);
+    expect(mockPrisma.webhookNonce.deleteMany).toHaveBeenCalledTimes(1);
   });
 });

@@ -15,7 +15,7 @@ if (isUpstashConfigured()) {
         });
     }
     catch (err) {
-        console.warn("AuditX verifyWebhook: Redis initialization failed, falling back to DB/memory:", err);
+        console.error("AuditX verifyWebhook: Upstash Redis client initialization failed:", err);
     }
 }
 /**
@@ -39,32 +39,42 @@ export function validateTimestampFreshness(timestamp) {
 /**
  * Checks and records a nonce to prevent replay attacks.
  * Rejects nonces that have already been used within a 10-minute window.
+ * If Redis is configured and fails, FAIL CLOSED (reject), never accept.
  */
 export async function verifyAndRecordNonce(nonce, prisma) {
     if (!nonce || typeof nonce !== "string" || nonce.trim().length === 0) {
-        return false;
+        return { ok: false, error: "Missing or invalid nonce format" };
     }
     const now = Date.now();
     const ttlSeconds = 600; // 10 minutes
-    // 1. Try Redis with atomic SET NX EX
-    if (redisClient) {
+    // 1. If Redis is configured, enforce strict atomic SET NX EX. Fail closed on error.
+    if (isUpstashConfigured()) {
+        if (!redisClient) {
+            console.error("SECURITY: Redis configured but client is uninitialized — failing closed");
+            return { ok: false, error: "Replay protection engine unavailable (fail-closed)" };
+        }
         try {
             const res = await redisClient.set(`auditx:nonce:${nonce}`, "1", {
                 ex: ttlSeconds,
                 nx: true,
             });
-            return Boolean(res === "OK" || res === true || res !== null);
+            const success = Boolean(res === "OK" || res === true || res !== null);
+            if (!success) {
+                return { ok: false, error: "Nonce already used or replayed (Redis)" };
+            }
+            return { ok: true };
         }
         catch (err) {
-            console.warn("Redis nonce check error, falling back:", err);
+            console.error("SECURITY: Redis nonce check encountered an error — failing closed:", err);
+            return { ok: false, error: "Replay protection check failed (fail-closed)" };
         }
     }
-    // 2. Memory check
+    // 2. Memory cache check
     const existingExpiry = memoryNonceCache.get(nonce);
     if (existingExpiry && existingExpiry > now) {
-        return false; // Replayed nonce
+        return { ok: false, error: "Invalid or replayed nonce (Memory)" };
     }
-    // Clean memory cache occasionally
+    // Clean memory cache if it grows large
     if (memoryNonceCache.size > 5000) {
         for (const [k, exp] of memoryNonceCache.entries()) {
             if (exp <= now)
@@ -79,7 +89,7 @@ export async function verifyAndRecordNonce(nonce, prisma) {
                 where: { nonce },
             });
             if (existing && existing.expiresAt.getTime() > now) {
-                return false;
+                return { ok: false, error: "Invalid or replayed nonce (Database)" };
             }
             await prisma.webhookNonce.upsert({
                 where: { nonce },
@@ -90,15 +100,35 @@ export async function verifyAndRecordNonce(nonce, prisma) {
         catch (err) {
             // If unique constraint violation, nonce was used concurrently
             if (err?.code === "P2002") {
-                return false;
+                return { ok: false, error: "Invalid or replayed nonce (Concurrent)" };
             }
         }
     }
-    return true;
+    return { ok: true };
+}
+/**
+ * Purge expired WebhookNonce rows from PostgreSQL.
+ */
+export async function purgeExpiredWebhookNonces(prisma) {
+    try {
+        const deleted = await prisma.webhookNonce.deleteMany({
+            where: {
+                expiresAt: { lt: new Date() },
+            },
+        });
+        if (deleted.count > 0) {
+            console.log(`[NONCE PURGE] Removed ${deleted.count} expired webhook nonce records`);
+        }
+        return deleted.count;
+    }
+    catch (err) {
+        console.warn("[NONCE PURGE] Failed to purge expired nonces:", err);
+        return 0;
+    }
 }
 /**
  * Verify AuditX HMAC-SHA256 signature over timestamp.nonce.body.
- * Uses crypto.timingSafeEqual for timing-attack resistance.
+ * Validates hex formatting, length guard before timingSafeEqual, and fail-closed replay checks.
  */
 export async function verifyAuditXWebhook(rawBody, signatureHeader, timestampHeader, nonceHeader, prisma) {
     const secret = process.env.AUDITX_WEBHOOK_SECRET;
@@ -106,7 +136,7 @@ export async function verifyAuditXWebhook(rawBody, signatureHeader, timestampHea
         console.error("SECURITY: AUDITX_WEBHOOK_SECRET environment variable is missing");
         return { valid: false, code: 500, error: "Server configuration error: webhook secret not set" };
     }
-    if (!signatureHeader) {
+    if (!signatureHeader || typeof signatureHeader !== "string") {
         return { valid: false, code: 401, error: "Missing x-auditx-signature header" };
     }
     if (!timestampHeader) {
@@ -115,25 +145,32 @@ export async function verifyAuditXWebhook(rawBody, signatureHeader, timestampHea
     if (!nonceHeader) {
         return { valid: false, code: 400, error: "Missing x-auditx-nonce header" };
     }
-    // 1. Validate Timestamp freshness (within 5 minutes)
+    // 1. Strict Hex Format & Length Validation on Signature (Must be exactly 64 hex chars for SHA-256)
+    const cleanSig = signatureHeader.startsWith("0x") ? signatureHeader.slice(2) : signatureHeader;
+    const isHex64 = /^[0-9a-fA-F]{64}$/.test(cleanSig);
+    if (!isHex64) {
+        return { valid: false, code: 401, error: "Invalid signature format: expected 64 hex characters" };
+    }
+    // 2. Validate Timestamp freshness (within 5 minutes)
     if (!validateTimestampFreshness(timestampHeader)) {
         return { valid: false, code: 401, error: "Timestamp expired or out of bounds (max 5 minutes window)" };
     }
-    // 2. Validate Nonce uniqueness (reject replay)
-    const nonceOk = await verifyAndRecordNonce(nonceHeader, prisma);
-    if (!nonceOk) {
-        return { valid: false, code: 401, error: "Invalid or replayed nonce" };
+    // 3. Validate Nonce uniqueness (reject replay, fail closed)
+    const nonceResult = await verifyAndRecordNonce(nonceHeader, prisma);
+    if (!nonceResult.ok) {
+        return { valid: false, code: 401, error: nonceResult.error || "Invalid or replayed nonce" };
     }
-    // 3. Compute expected signature over `timestamp.nonce.body`
+    // 4. Compute expected HMAC-SHA256 signature over `timestamp.nonce.body`
     const messageToSign = `${timestampHeader}.${nonceHeader}.${rawBody}`;
     const expectedHmac = crypto
         .createHmac("sha256", secret)
         .update(messageToSign)
         .digest("hex");
-    const expectedBuf = Buffer.from(expectedHmac, "utf8");
-    const receivedBuf = Buffer.from(signatureHeader, "utf8");
-    if (expectedBuf.length !== receivedBuf.length) {
-        return { valid: false, code: 401, error: "Invalid signature length or format" };
+    const expectedBuf = Buffer.from(expectedHmac, "hex");
+    const receivedBuf = Buffer.from(cleanSig, "hex");
+    // Length guard before timingSafeEqual (both must be exactly 32 bytes)
+    if (expectedBuf.length !== 32 || receivedBuf.length !== 32 || expectedBuf.length !== receivedBuf.length) {
+        return { valid: false, code: 401, error: "Invalid signature buffer length" };
     }
     if (!crypto.timingSafeEqual(expectedBuf, receivedBuf)) {
         return { valid: false, code: 401, error: "Invalid signature digest mismatch" };
